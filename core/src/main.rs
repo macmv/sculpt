@@ -2,7 +2,6 @@ mod blender;
 mod minecraft;
 
 use std::{
-  collections::HashMap,
   fs, io,
   os::unix::{
     fs::FileTypeExt,
@@ -20,10 +19,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let listener = UnixListener::bind(SOCKET_PATH)?;
   log::info!("listening for Blender connections at {SOCKET_PATH}");
 
-  let mut latest_revisions = HashMap::new();
+  let mut latest_revision = None;
   for connection in listener.incoming() {
     match connection {
-      Ok(stream) => receive_snapshots(stream, &mut latest_revisions),
+      Ok(stream) => receive_snapshots(stream, &mut latest_revision),
       Err(error) => log::warn!("failed to accept Blender connection: {error}"),
     }
   }
@@ -31,22 +30,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   Ok(())
 }
 
-fn receive_snapshots(stream: UnixStream, latest_revisions: &mut HashMap<[u8; 16], u64>) {
+fn receive_snapshots(stream: UnixStream, latest_revision: &mut Option<u64>) {
   log::info!("received Blender connection");
   let mut stream = stream;
 
   loop {
     match blender::read_mesh_snapshot(&mut stream) {
       Ok(snapshot) => {
-        if latest_revisions
-          .get(&snapshot.object_id)
-          .is_some_and(|revision| snapshot.revision <= *revision)
-        {
+        if latest_revision.is_some_and(|revision| snapshot.revision <= revision) {
           log::warn!("discarded stale Blender snapshot revision {}", snapshot.revision);
           continue;
         }
 
-        latest_revisions.insert(snapshot.object_id, snapshot.revision);
+        *latest_revision = Some(snapshot.revision);
         log::info!(
           "parsed Blender mesh snapshot revision {} ({} vertices, {} triangles)",
           snapshot.revision,
