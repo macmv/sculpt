@@ -7,10 +7,11 @@ every stroke, so publishing always begins from a complete evaluated mesh.
 import bpy
 
 from .protocol import build_mesh_snapshot
+from .transport import send_snapshot
 
 
 class CLIVE_OT_publish_snapshot(bpy.types.Operator):
-    """Prepare a full evaluated-mesh snapshot for the voxel service"""
+    """Send a full evaluated-mesh snapshot to the voxel service"""
 
     bl_idname = "sculpt_live.publish_snapshot"
     bl_label = "Publish Snapshot"
@@ -34,15 +35,19 @@ class CLIVE_OT_publish_snapshot(bpy.types.Operator):
                 return {"CANCELLED"}
 
             next_revision = settings.revision + 1
-            snapshot = build_mesh_snapshot(source, evaluated, mesh, next_revision)
+            snapshot = build_mesh_snapshot(source, evaluated, mesh, next_revision, settings)
+            send_snapshot(settings.socket_path, snapshot.payload)
             settings.revision = next_revision
             settings.last_snapshot_bytes = len(snapshot.payload)
             self.report(
                 {"INFO"},
-                f"Prepared revision {settings.revision}: "
+                f"Sent revision {settings.revision}: "
                 f"{snapshot.vertex_count} vertices, {snapshot.triangle_count} triangles, "
                 f"{settings.last_snapshot_bytes:,} bytes",
             )
+        except (OSError, ValueError) as error:
+            self.report({"ERROR"}, f"Publish failed: {error}")
+            return {"CANCELLED"}
         finally:
             evaluated.to_mesh_clear()
 

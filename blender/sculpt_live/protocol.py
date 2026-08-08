@@ -12,10 +12,9 @@ from mathutils import Vector
 
 
 MAGIC = b"SCLP"
-VERSION = 1
 FULL_SNAPSHOT = 1
 OBJECT_ID_PROPERTY = "_sculpt_live_object_id"
-HEADER = struct.Struct("<4sHH16sQIII16f6f")
+HEADER = struct.Struct("<4sH16sQIII16f6ff3i")
 
 
 @dataclass(frozen=True)
@@ -56,11 +55,12 @@ def _world_bounds(evaluated) -> tuple[float, float, float, float, float, float]:
     )
 
 
-def build_mesh_snapshot(source, evaluated, mesh, revision: int) -> MeshSnapshot:
-    """Serialize an evaluated mesh as a complete v1 snapshot.
+def build_mesh_snapshot(source, evaluated, mesh, revision: int, settings) -> MeshSnapshot:
+    """Serialize an evaluated mesh as a complete v2 snapshot.
 
     Vertices are local to the evaluated object; `matrix_world` in the header
-    maps them to world space. Dyntopo topology changes are therefore naturally
+    maps them to world space. The coordinate settings then map Blender world
+    space to Minecraft block space. Dyntopo topology changes are naturally
     represented by a complete new vertex/index buffer.
     """
     if revision < 1:
@@ -74,7 +74,11 @@ def build_mesh_snapshot(source, evaluated, mesh, revision: int) -> MeshSnapshot:
     if vertex_count == 0 or triangle_count == 0:
         raise ValueError("mesh must contain at least one triangle")
     if vertex_count > 0xFFFFFFFF or triangle_count > 0xFFFFFFFF:
-        raise ValueError("mesh is too large for protocol v1")
+        raise ValueError("mesh is too large for protocol v2")
+
+    units_per_block = settings.blender_units_per_block
+    if units_per_block <= 0:
+        raise ValueError("Blender Units per Block must be positive")
 
     positions = array("f")
     for vertex in mesh.vertices:
@@ -91,7 +95,6 @@ def build_mesh_snapshot(source, evaluated, mesh, revision: int) -> MeshSnapshot:
     dirty_aabb = _world_bounds(evaluated)
     header = HEADER.pack(
         MAGIC,
-        VERSION,
         HEADER.size,
         identifier.bytes,
         revision,
@@ -100,6 +103,8 @@ def build_mesh_snapshot(source, evaluated, mesh, revision: int) -> MeshSnapshot:
         triangle_count,
         *transform,
         *dirty_aabb,
+        units_per_block,
+        *settings.minecraft_origin,
     )
     payload = header + _as_little_endian(positions) + _as_little_endian(indices) + _as_little_endian(material_ids)
     return MeshSnapshot(payload, str(identifier), vertex_count, triangle_count)

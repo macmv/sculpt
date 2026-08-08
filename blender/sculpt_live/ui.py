@@ -16,6 +16,11 @@ class CLIVE_PT_panel(bpy.types.Panel):
 
         layout.prop(settings, "source_object")
         layout.prop(settings, "socket_path")
+        mapping = layout.box()
+        mapping.label(text="Minecraft Coordinates")
+        mapping.prop(settings, "blender_units_per_block")
+        mapping.prop(settings, "minecraft_origin")
+        mapping.label(text="X = X, Y = Z, Z = -Y", icon="INFO")
         layout.separator()
         layout.operator("sculpt_live.publish_snapshot", icon="EXPORT")
         layout.label(text=f"Last revision: {settings.revision}")
