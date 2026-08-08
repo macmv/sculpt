@@ -1,8 +1,7 @@
 use std::{error::Error, fmt, io::Read};
 
 const MAGIC: [u8; 4] = *b"SCLP";
-const VERSION: u16 = 1;
-const HEADER_SIZE: usize = 132;
+const HEADER_SIZE: usize = 146;
 const FULL_SNAPSHOT_FLAG: u32 = 1;
 const MAX_FRAME_SIZE: usize = 256 * 1024 * 1024;
 
@@ -12,6 +11,10 @@ pub struct MeshSnapshot {
   pub revision:   u64,
   pub transform:  [f32; 16],
   pub dirty_aabb: [f32; 6],
+  /// Blender world units represented by one Minecraft block.
+  pub units_per_block: f32,
+  /// Minecraft block coordinate corresponding to the Blender world origin.
+  pub minecraft_origin: [i32; 3],
   pub vertices:   Vec<[f32; 3]>,
   pub triangles:  Vec<Triangle>,
 }
@@ -73,18 +76,15 @@ pub fn parse_mesh_snapshot(body: &[u8]) -> Result<MeshSnapshot, MessageError> {
   if body[0..4] != MAGIC {
     return Err(MessageError("incorrect message magic".into()));
   }
-  if read_u16(body, 4) != VERSION {
-    return Err(MessageError("unsupported protocol version".into()));
-  }
-  if read_u16(body, 6) as usize != HEADER_SIZE {
+  if read_u16(body, 4) as usize != HEADER_SIZE {
     return Err(MessageError("incorrect header size".into()));
   }
-  if read_u32(body, 32) != FULL_SNAPSHOT_FLAG {
+  if read_u32(body, 30) != FULL_SNAPSHOT_FLAG {
     return Err(MessageError("message is not a full mesh snapshot".into()));
   }
 
-  let vertex_count = read_u32(body, 36) as usize;
-  let triangle_count = read_u32(body, 40) as usize;
+  let vertex_count = read_u32(body, 34) as usize;
+  let triangle_count = read_u32(body, 38) as usize;
   let vertex_bytes = vertex_count
     .checked_mul(3 * size_of::<f32>())
     .ok_or_else(|| MessageError("vertex buffer length overflows".into()))?;
@@ -107,12 +107,18 @@ pub fn parse_mesh_snapshot(body: &[u8]) -> Result<MeshSnapshot, MessageError> {
     )));
   }
 
-  let object_id = body[8..24].try_into().expect("fixed-width object ID");
-  let revision = read_u64(body, 24);
-  let transform = read_f32_array::<16>(body, 44);
-  let dirty_aabb = read_f32_array::<6>(body, 108);
+  let object_id = body[6..22].try_into().expect("fixed-width object ID");
+  let revision = read_u64(body, 22);
+  let transform = read_f32_array::<16>(body, 42);
+  let dirty_aabb = read_f32_array::<6>(body, 106);
+  let units_per_block = read_f32(body, 130);
+  let minecraft_origin = read_i32_array::<3>(body, 134);
   validate_finite("transform", &transform)?;
   validate_finite("dirty AABB", &dirty_aabb)?;
+  validate_finite("units per block", &[units_per_block])?;
+  if units_per_block <= 0.0 {
+    return Err(MessageError("units per block must be positive".into()));
+  }
   if dirty_aabb[0] > dirty_aabb[3] || dirty_aabb[1] > dirty_aabb[4] || dirty_aabb[2] > dirty_aabb[5]
   {
     return Err(MessageError("dirty AABB minimum exceeds its maximum".into()));
@@ -146,7 +152,16 @@ pub fn parse_mesh_snapshot(body: &[u8]) -> Result<MeshSnapshot, MessageError> {
     })
     .collect();
 
-  Ok(MeshSnapshot { object_id, revision, transform, dirty_aabb, vertices, triangles })
+  Ok(MeshSnapshot {
+    object_id,
+    revision,
+    transform,
+    dirty_aabb,
+    units_per_block,
+    minecraft_origin,
+    vertices,
+    triangles,
+  })
 }
 
 fn message_error(message: String) -> ReadError { ReadError::Message(MessageError(message)) }
@@ -178,8 +193,16 @@ fn read_u32_array<const N: usize>(bytes: &[u8], offset: usize) -> [u32; N] {
   std::array::from_fn(|index| read_u32(bytes, offset + index * size_of::<u32>()))
 }
 
+fn read_i32_array<const N: usize>(bytes: &[u8], offset: usize) -> [i32; N] {
+  std::array::from_fn(|index| read_i32(bytes, offset + index * size_of::<i32>()))
+}
+
 fn read_f32(bytes: &[u8], offset: usize) -> f32 {
   f32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("validated message"))
+}
+
+fn read_i32(bytes: &[u8], offset: usize) -> i32 {
+  i32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("validated header"))
 }
 
 #[cfg(test)]
@@ -189,18 +212,21 @@ mod tests {
   fn valid_message() -> Vec<u8> {
     let mut message = vec![0; HEADER_SIZE];
     message[0..4].copy_from_slice(&MAGIC);
-    message[4..6].copy_from_slice(&VERSION.to_le_bytes());
-    message[6..8].copy_from_slice(&(HEADER_SIZE as u16).to_le_bytes());
-    message[8..24].copy_from_slice(&[42; 16]);
-    message[24..32].copy_from_slice(&7_u64.to_le_bytes());
-    message[32..36].copy_from_slice(&FULL_SNAPSHOT_FLAG.to_le_bytes());
-    message[36..40].copy_from_slice(&3_u32.to_le_bytes());
-    message[40..44].copy_from_slice(&1_u32.to_le_bytes());
+    message[4..6].copy_from_slice(&(HEADER_SIZE as u16).to_le_bytes());
+    message[6..22].copy_from_slice(&[42; 16]);
+    message[22..30].copy_from_slice(&7_u64.to_le_bytes());
+    message[30..34].copy_from_slice(&FULL_SNAPSHOT_FLAG.to_le_bytes());
+    message[34..38].copy_from_slice(&3_u32.to_le_bytes());
+    message[38..42].copy_from_slice(&1_u32.to_le_bytes());
     for index in 0..16 {
-      message[44 + index * 4..48 + index * 4].copy_from_slice(&(index as f32).to_le_bytes());
+      message[42 + index * 4..46 + index * 4].copy_from_slice(&(index as f32).to_le_bytes());
     }
     for (index, value) in [0.0_f32, 1.0, 2.0, 3.0, 4.0, 5.0].into_iter().enumerate() {
-      message[108 + index * 4..112 + index * 4].copy_from_slice(&value.to_le_bytes());
+      message[106 + index * 4..110 + index * 4].copy_from_slice(&value.to_le_bytes());
+    }
+    message[130..134].copy_from_slice(&2.5_f32.to_le_bytes());
+    for (index, coordinate) in [100_i32, 64, -20].into_iter().enumerate() {
+      message[134 + index * 4..138 + index * 4].copy_from_slice(&coordinate.to_le_bytes());
     }
     for value in [0.0_f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
       message.extend_from_slice(&value.to_le_bytes());
@@ -221,6 +247,8 @@ mod tests {
     assert_eq!(mesh.triangles.len(), 1);
     assert_eq!(mesh.triangles[0].indices, [0, 1, 2]);
     assert_eq!(mesh.triangles[0].material_id, 4);
+    assert_eq!(mesh.units_per_block, 2.5);
+    assert_eq!(mesh.minecraft_origin, [100, 64, -20]);
   }
 
   #[test]
@@ -243,6 +271,17 @@ mod tests {
     let mut non_finite = valid_message();
     non_finite[HEADER_SIZE..HEADER_SIZE + 4].copy_from_slice(&f32::NAN.to_le_bytes());
     assert!(parse_mesh_snapshot(&non_finite).unwrap_err().to_string().contains("non-finite"));
+  }
+
+  #[test]
+  fn rejects_non_finite_or_non_positive_units_per_block() {
+    let mut non_finite = valid_message();
+    non_finite[130..134].copy_from_slice(&f32::INFINITY.to_le_bytes());
+    assert!(parse_mesh_snapshot(&non_finite).unwrap_err().to_string().contains("units per block"));
+
+    let mut zero = valid_message();
+    zero[130..134].copy_from_slice(&0.0_f32.to_le_bytes());
+    assert!(parse_mesh_snapshot(&zero).unwrap_err().to_string().contains("positive"));
   }
 
   #[test]
