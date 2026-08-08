@@ -1,0 +1,13 @@
+# Gradle build state and generated outputs
+.gradle/
+build/
+
+# IntelliJ IDEA local workspace state
+.idea/
+*.iml
+out/
+
+# Minecraft/Fabric runtime outputs
+run/
+logs/
+crash-reports/

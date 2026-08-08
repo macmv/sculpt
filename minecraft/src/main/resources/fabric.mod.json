@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "sculpt",
+  "version": "${version}",
+  "name": "sculpt",
+  "description": "",
+  "authors": [],
+  "contact": {},
+  "license": "All-Rights-Reserved",
+  "icon": "assets/sculpt/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "fabric-datagen": [
+      "net.macmv.sculpt.client.SculptDataGenerator"
+    ],
+    "client": [
+      "net.macmv.sculpt.client.SculptClient"
+    ],
+    "main": [
+      "net.macmv.sculpt.Sculpt"
+    ]
+  },
+  "mixins": [
+    "sculpt.mixins.json",
+    {
+      "config": "sculpt.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric-language-kotlin": ">=${kotlin_loader_version}",
+    "fabric-api": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}
