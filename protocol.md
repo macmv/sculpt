@@ -59,19 +59,6 @@ Minecraft block coordinates.
 | Offset | Type | Field |
 | --- | --- | --- |
 | 0 | `[u8; 4]` | ASCII `SCLM` |
-| 4 | `u32` | Capability flags; currently zero |
-
-Minecraft must send exactly one `SCLR` registry packet immediately after
-`SCLM`. Core responds with `SCLW` only after it has accepted that registry and
-will not send a delta before then. On a new subscription, core queues every
-current replacement section; it may coalesce these with later revisions before
-writing them.
-
-### `SCLR` — resolved block-state registry (Minecraft -> core)
-
-| Offset | Type | Field |
-| --- | --- | --- |
-| 0 | `[u8; 4]` | ASCII `SCLR` |
 | 4 | `u16` | State count, 1–65535 |
 | … | repeated | `u16` UTF-8 byte length + canonical block-state string |
 
@@ -99,7 +86,7 @@ disconnects; a changed registry requires a new connection.
 | 24 | `u8` | Result: `0` installed, `1` superseded, `2` rejected |
 
 Acknowledgements are advisory telemetry and must not be required for core to
-continue. Minecraft sends `superseded` for work replaced before installation
+continue. Minecraft may send `superseded` for work replaced before installation
 and `rejected` for a state it cannot resolve. Core may use these to report
 health, but does not retry a rejected delta indefinitely.
 
@@ -131,7 +118,7 @@ palette compression; Minecraft must not expand this into 4,096
 | … | `[u64; word_count]` | Palette indices, least-significant-bit first |
 
 A palette entry is a resolved registry block-state string from that
-subscriber's accepted `SCLR` registry, for example
+subscriber's accepted `SCLM` registry, for example
 `minecraft:stone` or `minecraft:oak_log[axis=y]`; it contains no numeric
 runtime block IDs. Minecraft resolves it against its local Overworld registry.
 The cell order is `x + 16 * (z + 16 * y)`, where `x`, `y`, and `z` are local

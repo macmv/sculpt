@@ -1,4 +1,5 @@
 mod blender;
+mod minecraft;
 
 use std::{
   collections::HashMap,
