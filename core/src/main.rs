@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let mut latest_revision = None;
   for connection in listener.incoming() {
     match connection {
-      Ok(stream) => receive_snapshots(stream, &mut latest_revision),
+      Ok(stream) => receive_snapshots(stream, &mut latest_revision, None),
       Err(error) => log::warn!("failed to accept Blender connection: {error}"),
     }
   }
@@ -31,7 +31,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   Ok(())
 }
 
-fn receive_snapshots(stream: UnixStream, latest_revision: &mut Option<u64>) {
+/// Receives Blender's framed `SCLP` packets.  Callers which own a Minecraft
+/// subscriber pass its state here; the mesh is then reconciled before this
+/// packet is accepted and discarded.
+fn receive_snapshots(
+  stream: UnixStream,
+  latest_revision: &mut Option<u64>,
+  mut minecraft: Option<&mut minecraft::MinecraftState>,
+) {
   log::info!("received Blender connection");
   let mut stream = stream;
 
@@ -41,6 +48,13 @@ fn receive_snapshots(stream: UnixStream, latest_revision: &mut Option<u64>) {
         if latest_revision.is_some_and(|revision| snapshot.revision <= revision) {
           log::warn!("discarded stale Blender snapshot revision {}", snapshot.revision);
           continue;
+        }
+
+        if let Some(state) = minecraft.as_deref_mut() {
+          if let Err(error) = topology::reconcile(&snapshot, None, state) {
+            log::warn!("discarded Blender snapshot revision {}: {error}", snapshot.revision);
+            continue;
+          }
         }
 
         *latest_revision = Some(snapshot.revision);
