@@ -118,14 +118,14 @@ palette compression; Minecraft must not expand this into 4,096
 
 The payload begins with big-endian `u16` non-air and fluid counts, then uses
 the vanilla block-state `PalettedContainer` encoding: a bits-per-entry byte,
-palette data, and a VarInt-length big-endian `u64` array. It has three forms: singleton uses zero
-bits, one VarInt global state ID, and a zero-length array; indirect uses 4–8
+palette data, and an inferred-length big-endian `u64` array. It has three forms: singleton uses zero
+bits and one VarInt global state ID; indirect uses 4–8
 bits, a VarInt palette length followed by VarInt global state IDs, then packed
 local-palette indices; direct uses 15 bits, no local palette, and packed global
 state IDs. Entries use cell order `x + 16 * (z + 16 * y)`, LSB-first within
 each long. Data is padded per long rather than straddling: each long contains
 `floor(64 / bits)` entries and array length is
-`ceil(4096 / floor(64 / bits))`. The header remains little-endian; only this
+`ceil(4096 / floor(64 / bits))`; no array length appears on the wire. The header remains little-endian; only this
 embedded payload follows Minecraft network byte order. Minecraft appends the
 target section's existing native biome container, then passes the resulting
 complete section data to `LevelChunkSection.read` and requires it to consume

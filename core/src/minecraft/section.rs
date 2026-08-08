@@ -78,8 +78,7 @@ impl Section {
     match &self.storage {
       Storage::Singleton(v) => {
         out.push(0);
-        varint(out, v.0 as u32);
-        varint(out, 0)
+        varint(out, v.0 as u32)
       }
       Storage::Indirect { bits, palette, data } => {
         out.push(*bits);
@@ -126,7 +125,6 @@ fn varint(out: &mut Vec<u8>, mut v: u32) {
   out.push(v as u8)
 }
 fn write_longs(out: &mut Vec<u8>, data: &[u64]) {
-  varint(out, data.len() as u32);
   for &v in data {
     out.extend_from_slice(&v.to_be_bytes())
   }
