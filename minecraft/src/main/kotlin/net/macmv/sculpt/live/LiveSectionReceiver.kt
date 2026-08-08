@@ -29,7 +29,8 @@ internal class LiveSectionReceiver {
   }
 
   private fun install(world: ServerLevel, delta: SectionDelta): Boolean = try {
-    val sectionIndex = world.getSectionIndex(delta.key.y)
+    // `getSectionIndex` takes a block Y; the delta already carries section Y.
+    val sectionIndex = world.getSectionIndexFromSectionY(delta.key.y)
     val chunk = world.getChunk(delta.key.x, delta.key.z)
     if (sectionIndex !in chunk.sections.indices) return false
 
