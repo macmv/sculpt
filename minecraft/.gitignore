@@ -11,3 +11,5 @@ out/
 run/
 logs/
 crash-reports/
+
+.kotlin
