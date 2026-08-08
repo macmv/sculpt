@@ -44,6 +44,39 @@ that many protocol bytes. Do not send geometry as JSON.
 Every message includes a sculpt-object identifier, monotonically increasing
 revision, object transform, and a world-space dirty AABB hint.
 
+### Shared socket and peer roles
+
+Rust remains the Unix-domain socket listener at `/tmp/sculpt-live.sock`.
+Blender publishers and Minecraft subscribers independently connect to this one
+socket; Minecraft does not listen for a second connection. Blender continues to
+publish framed `SCLP` mesh snapshots. A Minecraft peer sends a framed `SCLM`
+hello immediately after connecting (`SCLM`, little-endian `u16` protocol
+version). The first payload identifies the peer role, so the service can retain
+subscriber connections and remove them when they disconnect or a write fails.
+
+The service broadcasts `SCLD` complete replacement section deltas to active
+Minecraft subscribers. Version 1 payloads are little-endian: `SCLD`, `u16`
+version, source UUID (two `u64`s), `u64` revision, section `i32 x/y/z`, `u16`
+palette count, palette entries (`u16` UTF-8 byte length plus registry state
+string), `u8` bits per index, `u16` packed-word count, then packed `u64`
+palette indices. A section has exactly 4096 entries in Minecraft order
+`x + 16 * (z + 16 * y)`. `bits` is zero and word count is zero for a one-entry
+palette; otherwise the word count is `ceil(4096 * bits / 64)`.
+
+Core must not block mesh ingestion or voxelization on a slow Minecraft client.
+It uses a bounded outbound queue per subscriber and drops or supersedes queued
+older revisions for the same source and section position.
+
+### Coordinate contract
+
+The Blender add-on owns the Blender-to-Minecraft coordinate mapping and sends
+it with every snapshot. Its panel defines `units_per_block` and a Minecraft
+block origin for Blender world origin. For a Blender world point `(x, y, z)`,
+Minecraft block-space is `(origin_x + x / units, origin_y + z / units,
+origin_z - y / units)`. This keeps Blender Z-up aligned with Minecraft Y-up
+without mirroring the sculpt. Rust must use the mapping from the snapshot, not
+a separately configured scale or origin.
+
 ### Dyntopo: normal path
 
 Dyntopo can create, remove, and re-triangulate faces on every stroke. There is
