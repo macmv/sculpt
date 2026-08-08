@@ -61,9 +61,26 @@ Minecraft block coordinates.
 | 0 | `[u8; 4]` | ASCII `SCLM` |
 | 4 | `u32` | Capability flags; currently zero |
 
-Core responds with `SCLW` before sending deltas. On a new subscription, core
-queues every current replacement section; it may coalesce these with later
-revisions before writing them.
+Minecraft must send exactly one `SCLR` registry packet immediately after
+`SCLM`. Core responds with `SCLW` only after it has accepted that registry and
+will not send a delta before then. On a new subscription, core queues every
+current replacement section; it may coalesce these with later revisions before
+writing them.
+
+### `SCLR` — resolved block-state registry (Minecraft -> core)
+
+| Offset | Type | Field |
+| --- | --- | --- |
+| 0 | `[u8; 4]` | ASCII `SCLR` |
+| 4 | `u16` | State count, 1–65535 |
+| … | repeated | `u16` UTF-8 byte length + canonical block-state string |
+
+The registry is the complete set of canonical Overworld block-state strings
+that this Minecraft instance can resolve. It must contain `minecraft:air`, may
+not contain an empty or duplicate string, and must consume the frame exactly.
+Core validates every state it puts into an `SCLD` palette against this set.
+The registry is connection-local and remains valid until that subscriber
+disconnects; a changed registry requires a new connection.
 
 ### `SCLW` — welcome (core -> Minecraft)
 
@@ -113,7 +130,8 @@ palette compression; Minecraft must not expand this into 4,096
 | … | `u16` | Packed `u64` word count |
 | … | `[u64; word_count]` | Palette indices, least-significant-bit first |
 
-A palette entry is a resolved registry block-state string, for example
+A palette entry is a resolved registry block-state string from that
+subscriber's accepted `SCLR` registry, for example
 `minecraft:stone` or `minecraft:oak_log[axis=y]`; it contains no numeric
 runtime block IDs. Minecraft resolves it against its local Overworld registry.
 The cell order is `x + 16 * (z + 16 * y)`, where `x`, `y`, and `z` are local
@@ -121,7 +139,8 @@ coordinates 0–15. For a palette size of one, `bits` and `word_count` are zero.
 Otherwise `bits = ceil(log2(palette_count))` and
 `word_count = ceil(4096 * bits / 64)`. Values may straddle adjacent words;
 unused high bits in the final word are zero. Every decoded index must be less
-than `palette_count`.
+than `palette_count`. Core assigns palette indices in first-cell-occurrence
+order, then packs each index little-endian into the contiguous bit stream.
 
 Minecraft keeps only the greatest revision for a given `(section x, y, z)` and
 abandons a queued or in-progress older replacement when
