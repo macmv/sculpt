@@ -20,12 +20,18 @@ const SUBSCRIBER_QUEUE_CAPACITY: usize = 128;
 
 enum CoreEvent {
   Snapshot(blender::MeshSnapshot),
-  Subscribe { subscriber: minecraft::MinecraftSubscriber, outgoing: SyncSender<Vec<u8>> },
+  Subscribe { subscriber: minecraft::MinecraftSubscriber, outgoing: SyncSender<OutgoingDelta> },
 }
 
 struct Subscriber {
   subscriber: minecraft::MinecraftSubscriber,
-  outgoing:   SyncSender<Vec<u8>>,
+  outgoing:   SyncSender<OutgoingDelta>,
+}
+
+struct OutgoingDelta {
+  revision: u64,
+  position: minecraft::SectionPos,
+  payload:  Vec<u8>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -119,11 +125,18 @@ fn receive_subscriber(mut stream: UnixStream, hello: Vec<u8>, sender: mpsc::Send
   if sender.send(CoreEvent::Subscribe { subscriber, outgoing }).is_err() {
     return;
   }
-  for message in messages {
-    if let Err(error) = write_frame(&mut stream, &message) {
+  for delta in messages {
+    if let Err(error) = write_frame(&mut stream, &delta.payload) {
       log::info!("Minecraft subscriber disconnected: {error}");
       return;
     }
+    log::info!(
+      "sent Minecraft section ({}, {}, {}) for revision {}",
+      delta.position.x,
+      delta.position.y,
+      delta.position.z,
+      delta.revision
+    );
   }
 }
 
@@ -150,8 +163,14 @@ fn process_events(receiver: Receiver<CoreEvent>) {
             );
             return true;
           }
-          entry.subscriber.enqueue_modified_sections(snapshot.revision);
-          for (_, delta) in entry.subscriber.take_pending() {
+          let changed_sections = entry.subscriber.enqueue_modified_sections(snapshot.revision);
+          log::info!(
+            "finished topology reconciliation for revision {} ({} changed sections)",
+            snapshot.revision,
+            changed_sections
+          );
+          for (position, payload) in entry.subscriber.take_pending() {
+            let delta = OutgoingDelta { revision: snapshot.revision, position, payload };
             match entry.outgoing.try_send(delta) {
               Ok(()) => {}
               Err(TrySendError::Full(_)) => {

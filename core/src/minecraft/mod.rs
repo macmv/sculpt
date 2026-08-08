@@ -181,11 +181,13 @@ impl MinecraftSubscriber {
       self.pending.insert(pos, self.state.serialize_section_delta(revision, pos));
     }
   }
-  pub fn enqueue_modified_sections(&mut self, revision: u64) {
+  pub fn enqueue_modified_sections(&mut self, revision: u64) -> usize {
     let p: Vec<_> = self.state.drain_modified_sections().collect();
+    let count = p.len();
     for pos in p {
       self.enqueue(revision, pos)
     }
+    count
   }
   pub fn take_pending(&mut self) -> impl Iterator<Item = (SectionPos, Vec<u8>)> + '_ {
     self.pending.drain()
