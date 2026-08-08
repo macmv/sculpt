@@ -12,14 +12,18 @@ Sculpting add-on.
 
 The initial scaffold exposes a **Sculpt Live** panel in the 3D View sidebar.
 Choose a mesh source object and use **Publish Snapshot**. The current operator
-evaluates the mesh and reserves a monotonically increasing revision; transport
-to the Rust voxel service is deliberately left as the next implementation step.
+builds a compact binary full-mesh snapshot and reserves a monotonically
+increasing revision; transport to the Rust voxel service is deliberately left
+as the next implementation step. See `PROTOCOL.md` for the wire format.
+The intended transport is a Unix domain socket at `/tmp/sculpt-live.sock`, with
+length-prefixed binary messages. Do not send mesh geometry as JSON.
 
 ## Layout
 
 - `sculpt_live/__init__.py` — add-on metadata and registration
 - `sculpt_live/properties.py` — scene-level configuration
 - `sculpt_live/operators.py` — evaluated-mesh snapshot entry point
+- `sculpt_live/protocol.py` — binary full-mesh snapshot encoder
 - `sculpt_live/ui.py` — 3D View panel
 
 Keep Blender as the source of truth. The eventual transport should send binary

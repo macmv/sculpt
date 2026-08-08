@@ -10,14 +10,20 @@ class CLIVE_PG_settings(bpy.types.PropertyGroup):
         type=bpy.types.Object,
         poll=lambda _self, obj: obj.type == "MESH",
     )
-    service_address: bpy.props.StringProperty(
-        name="Service Address",
-        description="Local Rust voxel service endpoint",
-        default="ws://127.0.0.1:8765",
+    socket_path: bpy.props.StringProperty(
+        name="Socket Path",
+        description="Unix domain socket owned by the local Rust voxel service",
+        default="/tmp/sculpt-live.sock",
     )
     revision: bpy.props.IntProperty(
         name="Revision",
         description="Last revision reserved for a published mesh snapshot",
+        default=0,
+        min=0,
+    )
+    last_snapshot_bytes: bpy.props.IntProperty(
+        name="Snapshot Size",
+        description="Bytes in the most recently prepared binary mesh snapshot",
         default=0,
         min=0,
     )

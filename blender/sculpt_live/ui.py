@@ -15,7 +15,9 @@ class CLIVE_PT_panel(bpy.types.Panel):
         settings = context.scene.sculpt_live
 
         layout.prop(settings, "source_object")
-        layout.prop(settings, "service_address")
+        layout.prop(settings, "socket_path")
         layout.separator()
         layout.operator("sculpt_live.publish_snapshot", icon="EXPORT")
         layout.label(text=f"Last revision: {settings.revision}")
+        if settings.last_snapshot_bytes:
+            layout.label(text=f"Snapshot size: {settings.last_snapshot_bytes:,} bytes")

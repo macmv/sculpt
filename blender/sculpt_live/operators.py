@@ -6,6 +6,8 @@ every stroke, so publishing always begins from a complete evaluated mesh.
 
 import bpy
 
+from .protocol import build_mesh_snapshot
+
 
 class CLIVE_OT_publish_snapshot(bpy.types.Operator):
     """Prepare a full evaluated-mesh snapshot for the voxel service"""
@@ -31,16 +33,15 @@ class CLIVE_OT_publish_snapshot(bpy.types.Operator):
                 self.report({"ERROR"}, "The sculpt object has no faces to publish")
                 return {"CANCELLED"}
 
-            # This is intentionally the point where a binary MeshSnapshot is
-            # assembled: float32 world-space vertices, uint32 triangle indices,
-            # material IDs, transform, revision, and dirty-AABB hint.
-            vertex_count = len(mesh.vertices)
-            triangle_count = sum(len(polygon.vertices) - 2 for polygon in mesh.polygons)
-            settings.revision += 1
+            next_revision = settings.revision + 1
+            snapshot = build_mesh_snapshot(source, evaluated, mesh, next_revision)
+            settings.revision = next_revision
+            settings.last_snapshot_bytes = len(snapshot.payload)
             self.report(
                 {"INFO"},
                 f"Prepared revision {settings.revision}: "
-                f"{vertex_count} vertices, {triangle_count} triangles",
+                f"{snapshot.vertex_count} vertices, {snapshot.triangle_count} triangles, "
+                f"{settings.last_snapshot_bytes:,} bytes",
             )
         finally:
             evaluated.to_mesh_clear()
