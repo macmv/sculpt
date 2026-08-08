@@ -4,27 +4,43 @@ import net.fabricmc.fabric.api.networking.v1.PlayerLookup
 import net.minecraft.core.SectionPos
 import io.netty.buffer.Unpooled
 import net.minecraft.network.FriendlyByteBuf
+import net.minecraft.network.protocol.game.ClientboundForgetLevelChunkPacket
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.world.level.Level
 import net.minecraft.world.level.chunk.LevelChunkSection
 import net.minecraft.world.level.levelgen.Heightmap
+import org.slf4j.LoggerFactory
 
 /** Installs core-produced sections directly into loaded/generated Overworld chunks. */
 internal class LiveSectionReceiver {
   private val queue = DeltaQueue()
   private val socket = SocketSubscriber(queue)
+  private val logger = LoggerFactory.getLogger(LiveSectionReceiver::class.java)
 
-  fun start() = socket.start()
-  fun stop() = socket.stop()
+  fun start() {
+    logger.info("Starting Sculpt section receiver")
+    socket.start()
+  }
+  fun stop() {
+    logger.info("Stopping Sculpt section receiver")
+    socket.stop()
+  }
 
   /** Called from END_SERVER_TICK. A tick installs only a small number of whole sections. */
   fun tick(server: MinecraftServer, maxSections: Int = 2) {
     val world = server.getLevel(Level.OVERWORLD) ?: return
     repeat(maxSections) {
       val delta = queue.poll() ?: return
-      if (!queue.isSuperseded(delta) && install(world, delta)) queue.markApplied(delta)
+      logger.info("Dequeued Sculpt section ({}, {}, {}) for revision {}", delta.key.x, delta.key.y, delta.key.z, delta.revision)
+      if (queue.isSuperseded(delta)) {
+        logger.info("Skipped superseded Sculpt section ({}, {}, {}) for revision {}", delta.key.x, delta.key.y, delta.key.z, delta.revision)
+      } else if (install(world, delta)) {
+        queue.markApplied(delta)
+      } else {
+        logger.warn("Failed to install Sculpt section ({}, {}, {}) for revision {}", delta.key.x, delta.key.y, delta.key.z, delta.revision)
+      }
     }
   }
 
@@ -57,12 +73,25 @@ internal class LiveSectionReceiver {
     chunk.markUnsaved()
     world.chunkSource.lightEngine.updateSectionStatus(SectionPos.of(delta.key.x, delta.key.y, delta.key.z), replacement.hasOnlyAir())
     world.chunkSource.lightEngine.propagateLightSources(chunk.pos)
-    // Send one complete chunk packet to clients which already track this chunk.
-    // No block mutation or per-cell update packets are emitted.
+    // A chunk-data packet alone is ignored by an already-loaded client in this
+    // path. Make each tracker unload it first, then send the complete native
+    // chunk and light state so its client-side chunk/render data is rebuilt.
     val packet = ClientboundLevelChunkWithLightPacket(chunk, world.chunkSource.lightEngine, null, null)
-    PlayerLookup.tracking(world, chunk.pos).forEach { it.connection.send(packet) }
+    val forget = ClientboundForgetLevelChunkPacket(chunk.pos)
+    PlayerLookup.tracking(world, chunk.pos).forEach {
+      it.connection.send(forget)
+      it.connection.send(packet)
+    }
+    logger.info(
+      "Installed Sculpt section ({}, {}, {}) for revision {}",
+      delta.key.x,
+      delta.key.y,
+      delta.key.z,
+      delta.revision,
+    )
     true
-  } catch (_: IllegalArgumentException) {
+  } catch (error: Exception) {
+    logger.warn("Exception installing Sculpt section ({}, {}, {}) for revision {}", delta.key.x, delta.key.y, delta.key.z, delta.revision, error)
     false
   }
 }
