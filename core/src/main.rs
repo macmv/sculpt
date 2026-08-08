@@ -39,7 +39,7 @@ fn receive_snapshots(
   latest_revision: &mut Option<u64>,
   mut minecraft: Option<&mut minecraft::MinecraftState>,
 ) {
-  log::info!("received Blender connection");
+  log::info!("received socket client connection");
   let mut stream = stream;
 
   loop {
@@ -59,14 +59,14 @@ fn receive_snapshots(
 
         *latest_revision = Some(snapshot.revision);
         log::info!(
-          "parsed Blender mesh snapshot revision {} ({} vertices, {} triangles)",
+          "received Blender mesh snapshot revision {} ({} vertices, {} triangles)",
           snapshot.revision,
           snapshot.vertices.len(),
           snapshot.triangles.len()
         );
       }
       Err(blender::ReadError::Io(error)) if error.kind() == io::ErrorKind::UnexpectedEof => {
-        log::info!("Blender connection closed");
+        log::info!("socket client connection closed");
         return;
       }
       Err(error) => {

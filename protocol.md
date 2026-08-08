@@ -3,7 +3,9 @@
 This is the local, Unix-domain-socket protocol between Blender, the Rust core,
 and Minecraft. The core is the only listener, at `/tmp/sculpt-live.sock`.
 Every peer connects to it independently. All multi-byte numeric fields are
-little-endian; strings are UTF-8; no message uses JSON.
+little-endian; strings are UTF-8; no message uses JSON, except that the
+embedded native Minecraft section payload in `SCLD` uses Minecraft's own
+network encoding.
 
 ## Framing and connection roles
 
@@ -59,13 +61,14 @@ Minecraft block coordinates.
 | Offset | Type | Field |
 | --- | --- | --- |
 | 0 | `[u8; 4]` | ASCII `SCLM` |
-| 4 | `u16` | State count, 1–65535 |
+| 4 | `u16` | State count, 1–32768 |
 | … | repeated | `u16` UTF-8 byte length + canonical block-state string |
 
-The registry is the complete set of canonical Overworld block-state strings
-that this Minecraft instance can resolve. It must contain `minecraft:air`, may
-not contain an empty or duplicate string, and must consume the frame exactly.
-Core validates every state it puts into an `SCLD` palette against this set.
+The registry is the complete global block-state registry in Minecraft runtime
+ID order (ID zero first). It must contain `minecraft:air`, may not contain an
+empty or duplicate string, and must consume the frame exactly. Core uses this
+ordering directly as the global palette ID and rejects registries beyond the
+15-bit direct-palette range.
 The registry is connection-local and remains valid until that subscriber
 disconnects; a changed registry requires a new connection.
 
@@ -111,23 +114,20 @@ palette compression; Minecraft must not expand this into 4,096
 | 0 | `[u8; 4]` | ASCII `SCLD` |
 | 4 | `u64` | Global revision |
 | 12 | `[i32; 3]` | Minecraft section x, y, z |
-| 24 | `u16` | Palette entry count, 1–4096 |
-| … | repeated | `u16` UTF-8 byte length + block-state string |
-| … | `u8` | Bits per palette index |
-| … | `u16` | Packed `u64` word count |
-| … | `[u64; word_count]` | Palette indices, least-significant-bit first |
+| 24 | `[u8; …]` | Native `LevelChunkSection` block-state payload |
 
-A palette entry is a resolved registry block-state string from that
-subscriber's accepted `SCLM` registry, for example
-`minecraft:stone` or `minecraft:oak_log[axis=y]`; it contains no numeric
-runtime block IDs. Minecraft resolves it against its local Overworld registry.
-The cell order is `x + 16 * (z + 16 * y)`, where `x`, `y`, and `z` are local
-coordinates 0–15. For a palette size of one, `bits` and `word_count` are zero.
-Otherwise `bits = ceil(log2(palette_count))` and
-`word_count = ceil(4096 * bits / 64)`. Values may straddle adjacent words;
-unused high bits in the final word are zero. Every decoded index must be less
-than `palette_count`. Core assigns palette indices in first-cell-occurrence
-order, then packs each index little-endian into the contiguous bit stream.
+The payload begins with a big-endian `u16` non-air block count, then uses the
+vanilla `PalettedContainer` encoding: a bits-per-entry byte, palette data, and
+a VarInt-length big-endian `u64` array. It has three forms: singleton uses zero
+bits, one VarInt global state ID, and a zero-length array; indirect uses 4–8
+bits, a VarInt palette length followed by VarInt global state IDs, then packed
+local-palette indices; direct uses 15 bits, no local palette, and packed global
+state IDs. Entries use cell order `x + 16 * (z + 16 * y)`, LSB-first within
+each long. Data is padded per long rather than straddling: each long contains
+`floor(64 / bits)` entries and array length is
+`ceil(4096 / floor(64 / bits))`. The header remains little-endian; only this
+embedded payload follows Minecraft network byte order. Minecraft passes it
+directly to `LevelChunkSection.read` and requires it to consume exactly.
 
 Minecraft keeps only the greatest revision for a given `(section x, y, z)` and
 abandons a queued or in-progress older replacement when

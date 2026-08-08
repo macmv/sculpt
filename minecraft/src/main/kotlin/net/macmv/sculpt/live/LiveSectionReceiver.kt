@@ -1,15 +1,13 @@
 package net.macmv.sculpt.live
 
 import net.fabricmc.fabric.api.networking.v1.PlayerLookup
-import net.minecraft.core.registries.BuiltInRegistries
 import net.minecraft.core.SectionPos
+import io.netty.buffer.Unpooled
+import net.minecraft.network.FriendlyByteBuf
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket
-import net.minecraft.resources.Identifier
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.level.ServerLevel
 import net.minecraft.world.level.Level
-import net.minecraft.world.level.block.state.BlockState
-import net.minecraft.world.level.block.state.properties.Property
 import net.minecraft.world.level.chunk.LevelChunkSection
 import net.minecraft.world.level.levelgen.Heightmap
 
@@ -31,8 +29,6 @@ internal class LiveSectionReceiver {
   }
 
   private fun install(world: ServerLevel, delta: SectionDelta): Boolean = try {
-    val states = delta.palette.map(::parseBlockState)
-    require(states.none { it.hasBlockEntity() }) { "Block entities are not supported in section deltas" }
     val sectionIndex = world.getSectionIndex(delta.key.y)
     val chunk = world.getChunk(delta.key.x, delta.key.z)
     if (sectionIndex !in chunk.sections.indices) return false
@@ -40,12 +36,9 @@ internal class LiveSectionReceiver {
     // This deliberately bypasses ServerWorld.setBlockState: build a replacement
     // section off-world, then swap it into the chunk in one operation.
     val replacement: LevelChunkSection = chunk.getSection(sectionIndex).copy()
-    for (cell in 0 until SECTION_VOLUME) {
-      val x = cell and 15
-      val z = (cell ushr 4) and 15
-      val y = cell ushr 8
-      replacement.setBlockState(x, y, z, states[delta.indices[cell]], false)
-    }
+    val input = FriendlyByteBuf(Unpooled.wrappedBuffer(delta.sectionData))
+    replacement.read(input)
+    require(input.readableBytes() == 0) { "Trailing native section data" }
     if (queue.isSuperseded(delta)) return false
     val sectionBottomY = delta.key.y shl 4
     // A replacement cannot retain block entities from the old section. Core's
@@ -64,35 +57,5 @@ internal class LiveSectionReceiver {
     true
   } catch (_: IllegalArgumentException) {
     false
-  }
-
-  private fun parseBlockState(encoded: String): BlockState {
-    val bracket = encoded.indexOf('[')
-    val idText = if (bracket == -1) encoded else encoded.substring(0, bracket)
-    val id = Identifier.parse(idText)
-    val block = BuiltInRegistries.BLOCK.getOptional(id).orElseThrow { IllegalArgumentException("Unknown block: $idText") }
-    var state = block.defaultBlockState()
-    if (bracket == -1) return state
-    require(encoded.endsWith(']')) { "Malformed block state: $encoded" }
-    val properties = encoded.substring(bracket + 1, encoded.length - 1)
-    if (properties.isEmpty()) return state
-    for (part in properties.split(',')) {
-      val equals = part.indexOf('=')
-      require(equals > 0 && equals < part.length - 1) { "Malformed block property: $part" }
-      state = setProperty(state, part.substring(0, equals), part.substring(equals + 1))
-    }
-    return state
-  }
-
-  private fun setProperty(state: BlockState, name: String, value: String): BlockState {
-    val property = state.properties.firstOrNull { it.name == name } ?: throw IllegalArgumentException("Unknown block property: $name")
-    return setParsedProperty(state, property, value)
-  }
-
-  @Suppress("UNCHECKED_CAST")
-  private fun setParsedProperty(state: BlockState, property: Property<*>, value: String): BlockState {
-    val typed = property as Property<Comparable<Any>>
-    val parsed = typed.getValue(value).orElseThrow { IllegalArgumentException("Invalid value '$value' for ${property.name}") }
-    return state.setValue(typed, parsed)
   }
 }
