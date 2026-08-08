@@ -35,8 +35,11 @@ packaging burden.
 
 ## Blender to Rust protocol
 
-The transport is local IPC (Unix socket/named pipe or localhost WebSocket) with
-a binary protocol. Do not send geometry as JSON.
+The transport is a local Unix domain stream socket with a binary protocol. The
+service owns the socket path (initially `/tmp/sculpt-live.sock`) and Blender
+connects only to that path; there is no TCP or WebSocket listener. Each socket
+message is framed as a little-endian `u32` payload length followed by exactly
+that many protocol bytes. Do not send geometry as JSON.
 
 Every message includes a sculpt-object identifier, monotonically increasing
 revision, object transform, and a world-space dirty AABB hint.
