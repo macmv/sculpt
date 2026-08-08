@@ -66,10 +66,15 @@ impl Section {
     (0..SECTION_VOLUME).filter(|&i| self.at(i) != air).count() as u16
   }
   fn at(&self, i: usize) -> BlockId { self.get(i & 15, i >> 8, (i >> 4) & 15) }
-  /// Vanilla `LevelChunkSection.write`: big-endian count then
-  /// `PalettedContainer`.
+  /// The block-state prefix of vanilla `LevelChunkSection.write`: big-endian
+  /// non-air and fluid counts followed by the block-state `PalettedContainer`.
+  /// The receiver appends its existing biome container before invoking the
+  /// native section reader, since Sculpt does not transport biome changes.
   pub fn write_network(&self, out: &mut Vec<u8>, air: BlockId) {
     out.extend_from_slice(&self.non_air_count(air).to_be_bytes());
+    // Core-generated sections currently contain only air and solid blocks.
+    // The native reader still requires this counter even when it is zero.
+    out.extend_from_slice(&0u16.to_be_bytes());
     match &self.storage {
       Storage::Singleton(v) => {
         out.push(0);

@@ -116,9 +116,9 @@ palette compression; Minecraft must not expand this into 4,096
 | 12 | `[i32; 3]` | Minecraft section x, y, z |
 | 24 | `[u8; …]` | Native `LevelChunkSection` block-state payload |
 
-The payload begins with a big-endian `u16` non-air block count, then uses the
-vanilla `PalettedContainer` encoding: a bits-per-entry byte, palette data, and
-a VarInt-length big-endian `u64` array. It has three forms: singleton uses zero
+The payload begins with big-endian `u16` non-air and fluid counts, then uses
+the vanilla block-state `PalettedContainer` encoding: a bits-per-entry byte,
+palette data, and a VarInt-length big-endian `u64` array. It has three forms: singleton uses zero
 bits, one VarInt global state ID, and a zero-length array; indirect uses 4–8
 bits, a VarInt palette length followed by VarInt global state IDs, then packed
 local-palette indices; direct uses 15 bits, no local palette, and packed global
@@ -126,8 +126,11 @@ state IDs. Entries use cell order `x + 16 * (z + 16 * y)`, LSB-first within
 each long. Data is padded per long rather than straddling: each long contains
 `floor(64 / bits)` entries and array length is
 `ceil(4096 / floor(64 / bits))`. The header remains little-endian; only this
-embedded payload follows Minecraft network byte order. Minecraft passes it
-directly to `LevelChunkSection.read` and requires it to consume exactly.
+embedded payload follows Minecraft network byte order. Minecraft appends the
+target section's existing native biome container, then passes the resulting
+complete section data to `LevelChunkSection.read` and requires it to consume
+exactly. Sculpt currently emits zero fluid count because it generates only air
+and solid blocks.
 
 Minecraft keeps only the greatest revision for a given `(section x, y, z)` and
 abandons a queued or in-progress older replacement when

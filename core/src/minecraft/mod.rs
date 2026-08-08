@@ -257,7 +257,8 @@ mod tests {
     let b = s.serialize_section_delta(9, SectionPos { x: 0, y: 0, z: 0 });
     assert_eq!(&b[..4], b"SCLD");
     assert_eq!(u16::from_be_bytes(b[24..26].try_into().unwrap()), 1);
-    assert_eq!(b[26], 4);
+    assert_eq!(u16::from_be_bytes(b[26..28].try_into().unwrap()), 0);
+    assert_eq!(b[28], 4);
     assert_eq!(s.section(SectionPos { x: 0, y: 0, z: 0 }).unwrap().get(1, 2, 3), stone);
   }
 }

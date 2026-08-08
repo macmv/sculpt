@@ -36,7 +36,13 @@ internal class LiveSectionReceiver {
     // This deliberately bypasses ServerWorld.setBlockState: build a replacement
     // section off-world, then swap it into the chunk in one operation.
     val replacement: LevelChunkSection = chunk.getSection(sectionIndex).copy()
-    val input = FriendlyByteBuf(Unpooled.wrappedBuffer(delta.sectionData))
+    // LevelChunkSection.read also consumes its biome container. Sculpt owns
+    // only block states, so retain the target section's native biome bytes and
+    // append them before handing the complete payload to Minecraft.
+    val input = FriendlyByteBuf(Unpooled.buffer(delta.sectionData.size + 64))
+    input.writeBytes(delta.sectionData)
+    replacement.biomes.write(input)
+    input.readerIndex(0)
     replacement.read(input)
     require(input.readableBytes() == 0) { "Trailing native section data" }
     if (queue.isSuperseded(delta)) return false
