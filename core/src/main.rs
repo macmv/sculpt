@@ -1,5 +1,6 @@
 mod blender;
 mod minecraft;
+mod topology;
 
 use std::{
   fs, io,

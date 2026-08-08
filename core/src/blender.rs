@@ -107,6 +107,9 @@ pub fn parse_mesh_snapshot(body: &[u8]) -> Result<MeshSnapshot, MessageError> {
   }
 
   let revision = read_u64(body, 6);
+  if revision == 0 {
+    return Err(MessageError("snapshot revision must be positive".into()));
+  }
   let transform = read_f32_array::<16>(body, 26);
   let dirty_aabb = read_f32_array::<6>(body, 90);
   let units_per_block = read_f32(body, 114);
@@ -277,6 +280,13 @@ mod tests {
     let mut zero = valid_message();
     zero[114..118].copy_from_slice(&0.0_f32.to_le_bytes());
     assert!(parse_mesh_snapshot(&zero).unwrap_err().to_string().contains("positive"));
+  }
+
+  #[test]
+  fn rejects_zero_revision() {
+    let mut message = valid_message();
+    message[6..14].copy_from_slice(&0_u64.to_le_bytes());
+    assert!(parse_mesh_snapshot(&message).unwrap_err().to_string().contains("revision"));
   }
 
   #[test]
