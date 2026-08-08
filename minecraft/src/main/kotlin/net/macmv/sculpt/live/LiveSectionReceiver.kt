@@ -1,10 +1,10 @@
 package net.macmv.sculpt.live
 
 import net.fabricmc.fabric.api.networking.v1.PlayerLookup
+import net.minecraft.core.BlockPos
 import net.minecraft.core.SectionPos
 import io.netty.buffer.Unpooled
 import net.minecraft.network.FriendlyByteBuf
-import net.minecraft.network.protocol.game.ClientboundForgetLevelChunkPacket
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.level.ServerLevel
@@ -71,17 +71,23 @@ internal class LiveSectionReceiver {
     chunk.sections[sectionIndex] = replacement
     Heightmap.primeHeightmaps(chunk, Heightmap.Types.values().toSet())
     chunk.markUnsaved()
-    world.chunkSource.lightEngine.updateSectionStatus(SectionPos.of(delta.key.x, delta.key.y, delta.key.z), replacement.hasOnlyAir())
-    world.chunkSource.lightEngine.propagateLightSources(chunk.pos)
-    // A chunk-data packet alone is ignored by an already-loaded client in this
-    // path. Make each tracker unload it first, then send the complete native
-    // chunk and light state so its client-side chunk/render data is rebuilt.
-    val packet = ClientboundLevelChunkWithLightPacket(chunk, world.chunkSource.lightEngine, null, null)
-    val forget = ClientboundForgetLevelChunkPacket(chunk.pos)
-    PlayerLookup.tracking(world, chunk.pos).forEach {
-      it.connection.send(forget)
-      it.connection.send(packet)
+    val lightEngine = world.chunkSource.lightEngine
+    lightEngine.updateSectionStatus(SectionPos.of(delta.key.x, delta.key.y, delta.key.z), replacement.hasOnlyAir())
+    // A section-status update only handles an empty/non-empty transition. The
+    // old section was swapped wholesale, so every cell must be rechecked to
+    // remove stale light and propagate new occlusion/emission correctly.
+    val baseX = delta.key.x shl 4
+    val baseY = delta.key.y shl 4
+    val baseZ = delta.key.z shl 4
+    for (y in 0 until 16) for (z in 0 until 16) for (x in 0 until 16) {
+      lightEngine.checkBlock(BlockPos(baseX + x, baseY + y, baseZ + z))
     }
+    lightEngine.propagateLightSources(chunk.pos)
+    // This packet replaces the client chunk data and queues its corresponding
+    // light update; unlike a forget packet, it does not leave a transient hole
+    // in the client's chunk cache/light engine.
+    val packet = ClientboundLevelChunkWithLightPacket(chunk, world.chunkSource.lightEngine, null, null)
+    PlayerLookup.tracking(world, chunk.pos).forEach { it.connection.send(packet) }
     logger.info(
       "Installed Sculpt section ({}, {}, {}) for revision {}",
       delta.key.x,
