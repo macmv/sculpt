@@ -3,7 +3,7 @@
 bl_info = {
     "name": "Sculpt Live",
     "author": "Sculpt Live contributors",
-    "version": (0, 1, 0),
+    "version": (0, 2, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Sculpt Live",
     "description": "Publish Blender sculpt snapshots to a local voxel service",

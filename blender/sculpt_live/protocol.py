@@ -4,36 +4,24 @@ from __future__ import annotations
 
 from array import array
 from dataclasses import dataclass
+import math
 import struct
 import sys
-import uuid
 
 from mathutils import Vector
 
 
 MAGIC = b"SCLP"
 FULL_SNAPSHOT = 1
-OBJECT_ID_PROPERTY = "_sculpt_live_object_id"
-HEADER = struct.Struct("<4sH16sQIII16f6ff3i")
+# SCLP's header is fixed at 130 bytes; see ../protocol.md.
+HEADER = struct.Struct("<4sHQIII16f6ff3i")
 
 
 @dataclass(frozen=True)
 class MeshSnapshot:
     payload: bytes
-    object_id: str
     vertex_count: int
     triangle_count: int
-
-
-def _get_object_id(source) -> uuid.UUID:
-    """Get or create an identifier that persists in the .blend file."""
-    value = source.get(OBJECT_ID_PROPERTY)
-    try:
-        return uuid.UUID(str(value))
-    except (TypeError, ValueError, AttributeError):
-        identifier = uuid.uuid4()
-        source[OBJECT_ID_PROPERTY] = str(identifier)
-        return identifier
 
 
 def _as_little_endian(values: array) -> bytes:
@@ -55,8 +43,8 @@ def _world_bounds(evaluated) -> tuple[float, float, float, float, float, float]:
     )
 
 
-def build_mesh_snapshot(source, evaluated, mesh, revision: int, settings) -> MeshSnapshot:
-    """Serialize an evaluated mesh as a complete v2 snapshot.
+def build_mesh_snapshot(_source, evaluated, mesh, revision: int, settings) -> MeshSnapshot:
+    """Serialize an evaluated mesh as a complete SCLP snapshot.
 
     Vertices are local to the evaluated object; `matrix_world` in the header
     maps them to world space. The coordinate settings then map Blender world
@@ -74,10 +62,10 @@ def build_mesh_snapshot(source, evaluated, mesh, revision: int, settings) -> Mes
     if vertex_count == 0 or triangle_count == 0:
         raise ValueError("mesh must contain at least one triangle")
     if vertex_count > 0xFFFFFFFF or triangle_count > 0xFFFFFFFF:
-        raise ValueError("mesh is too large for protocol v2")
+        raise ValueError("mesh is too large for the Sculpt Live protocol")
 
     units_per_block = settings.blender_units_per_block
-    if units_per_block <= 0:
+    if not math.isfinite(units_per_block) or units_per_block <= 0:
         raise ValueError("Blender Units per Block must be positive")
 
     positions = array("f")
@@ -90,13 +78,14 @@ def build_mesh_snapshot(source, evaluated, mesh, revision: int, settings) -> Mes
         indices.extend(triangle.vertices)
         material_ids.append(mesh.polygons[triangle.polygon_index].material_index)
 
-    identifier = _get_object_id(source)
     transform = tuple(value for row in evaluated.matrix_world for value in row)
     dirty_aabb = _world_bounds(evaluated)
+    numeric_values = (*transform, *dirty_aabb, units_per_block)
+    if not all(math.isfinite(value) for value in numeric_values):
+        raise ValueError("mesh transform and bounds must contain only finite values")
     header = HEADER.pack(
         MAGIC,
         HEADER.size,
-        identifier.bytes,
         revision,
         FULL_SNAPSHOT,
         vertex_count,
@@ -107,4 +96,4 @@ def build_mesh_snapshot(source, evaluated, mesh, revision: int, settings) -> Mes
         *settings.minecraft_origin,
     )
     payload = header + _as_little_endian(positions) + _as_little_endian(indices) + _as_little_endian(material_ids)
-    return MeshSnapshot(payload, str(identifier), vertex_count, triangle_count)
+    return MeshSnapshot(payload, vertex_count, triangle_count)
