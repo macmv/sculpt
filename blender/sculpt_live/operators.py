@@ -6,7 +6,7 @@ every stroke, so publishing always begins from a complete evaluated mesh.
 
 import bpy
 
-from .protocol import build_mesh_snapshot
+from .protocol import build_clear_region, build_mesh_snapshot
 from .transport import send_snapshot
 
 
@@ -31,6 +31,22 @@ def publish_scene_snapshot(scene, depsgraph):
         return snapshot
     finally:
         evaluated.to_mesh_clear()
+
+
+def clear_scene_aabb(scene, depsgraph):
+    """Replace the configured mesh object's current world-space AABB with air."""
+    settings = scene.sculpt_live
+    source = settings.source_object
+    if source is None or source.type != "MESH":
+        raise ValueError("choose a mesh Sculpt Object before clearing")
+
+    evaluated = source.evaluated_get(depsgraph)
+    next_revision = settings.revision + 1
+    payload = build_clear_region(evaluated, next_revision, settings)
+    send_snapshot(settings.socket_path, payload)
+    settings.revision = next_revision
+    settings.last_snapshot_bytes = len(payload)
+    return payload
 
 
 class CLIVE_OT_use_material_brush(bpy.types.Operator):
@@ -166,4 +182,26 @@ class CLIVE_OT_publish_snapshot(bpy.types.Operator):
             self.report({"ERROR"}, f"Publish failed: {error}")
             return {"CANCELLED"}
 
+        return {"FINISHED"}
+
+
+class CLIVE_OT_clear_aabb(bpy.types.Operator):
+    """Replace every block in the Sculpt Object AABB with air"""
+
+    bl_idname = "sculpt_live.clear_aabb"
+    bl_label = "Clear AABB"
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        settings = context.scene.sculpt_live
+        return settings.source_object is not None and settings.source_object.type == "MESH"
+
+    def execute(self, context):
+        try:
+            clear_scene_aabb(context.scene, context.evaluated_depsgraph_get())
+            self.report({"INFO"}, f"Cleared AABB in revision {context.scene.sculpt_live.revision}")
+        except (OSError, ValueError) as error:
+            self.report({"ERROR"}, f"Clear failed: {error}")
+            return {"CANCELLED"}
         return {"FINISHED"}

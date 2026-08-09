@@ -6,7 +6,7 @@ use std::{collections::HashMap, error::Error, fmt};
 use rand::{RngExt, SeedableRng, rngs::SmallRng};
 
 use crate::{
-  blender::{MeshSnapshot, SurfaceFeature},
+  blender::{ClearRegion, MeshSnapshot, SurfaceFeature},
   minecraft::{BlockId, BlockPos, MinecraftState},
 };
 
@@ -192,6 +192,55 @@ pub fn reconcile(
     air,
   );
   Ok(())
+}
+
+/// Replaces the requested Blender world-space AABB, including its one-block
+/// boundary padding, with air.
+pub fn clear_region(request: ClearRegion, state: &mut MinecraftState) -> Result<(), TopologyError> {
+  let region = clear_block_region(request)?;
+  let air = state.air();
+  for y in region.min.y..=region.max.y {
+    for z in region.min.z..=region.max.z {
+      for x in region.min.x..=region.max.x {
+        state.set(BlockPos { x, y, z }, air);
+      }
+    }
+  }
+  Ok(())
+}
+
+fn clear_block_region(request: ClearRegion) -> Result<BlockRegion, TopologyError> {
+  let [min_x, min_y, min_z, max_x, max_y, max_z] = request.world_aabb;
+  let unit = request.units_per_block as f64;
+  let origin = request.minecraft_origin;
+  let lower = |value: f64| -> Result<i32, TopologyError> {
+    let value = value.floor() - 1.0;
+    if value < i32::MIN as f64 || value > i32::MAX as f64 {
+      Err(TopologyError::CoordinateOverflow)
+    } else {
+      Ok(value as i32)
+    }
+  };
+  let upper = |value: f64| -> Result<i32, TopologyError> {
+    let value = value.ceil() + 1.0;
+    if value < i32::MIN as f64 || value > i32::MAX as f64 {
+      Err(TopologyError::CoordinateOverflow)
+    } else {
+      Ok(value as i32)
+    }
+  };
+  validate_region(BlockRegion {
+    min: BlockPos {
+      x: lower(origin[0] as f64 + min_x as f64 / unit)?,
+      y: lower(origin[1] as f64 + min_z as f64 / unit)?,
+      z: lower(origin[2] as f64 - max_y as f64 / unit)?,
+    },
+    max: BlockPos {
+      x: upper(origin[0] as f64 + max_x as f64 / unit)?,
+      y: upper(origin[1] as f64 + max_z as f64 / unit)?,
+      z: upper(origin[2] as f64 - min_y as f64 / unit)?,
+    },
+  })
 }
 
 #[derive(Clone)]
@@ -495,6 +544,26 @@ mod tests {
     mesh.triangles.pop();
     assert!(reconcile(&mesh, None, &mut s).is_err());
     assert_eq!(s.get(BlockPos { x: 4, y: 4, z: 4 }), stone);
+  }
+
+  #[test]
+  fn clear_region_replaces_the_entire_aabb_with_air() {
+    let mut s = state();
+    let stone = s.lookup("minecraft:stone").unwrap();
+    s.set(BlockPos { x: 0, y: 0, z: 0 }, stone);
+    s.set(BlockPos { x: 3, y: 3, z: 3 }, stone);
+    clear_region(
+      ClearRegion {
+        revision:         1,
+        world_aabb:       [0., -1., 0., 1., 0., 1.],
+        units_per_block:  1.,
+        minecraft_origin: [0; 3],
+      },
+      &mut s,
+    )
+    .unwrap();
+    assert_eq!(s.get(BlockPos { x: 0, y: 0, z: 0 }), s.air());
+    assert_eq!(s.get(BlockPos { x: 3, y: 3, z: 3 }), stone);
   }
 
   #[test]

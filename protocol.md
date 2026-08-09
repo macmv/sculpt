@@ -16,6 +16,7 @@ after connecting:
 | Peer | First packet | Direction |
 | --- | --- | --- |
 | Blender publisher | `SCLP` mesh snapshot | Blender -> core |
+| Blender publisher | `SCLC` clear region | Blender -> core |
 | Minecraft subscriber | `SCLM` hello | Minecraft -> core |
 
 `payload_length` must be non-zero and at most 4 MiB. Core closes the connection
@@ -63,6 +64,19 @@ Kind `2` (`tree`) carries length-prefixed trunk and leaves states followed by
 positive `u16` trunk height and `u16` canopy radius. Placement is deterministic
 from Minecraft X/Z coordinates; an interval of `N` selects roughly one in `N`
 qualifying top surfaces.
+
+### Blender clear region: `SCLC`
+
+`SCLC` replaces every block in an evaluated Blender object's world-space AABB
+with `minecraft:air`. It is emitted by the **Clear AABB** Blender control.
+
+| Offset | Type | Field |
+| --- | --- | --- |
+| 0 | `[u8; 4]` | ASCII `SCLC` |
+| 4 | `u64` | Global monotonically increasing revision |
+| 12 | `[f32; 6]` | World AABB: min xyz, then max xyz |
+| 36 | `f32` | Blender world units per Minecraft block |
+| 40 | `[i32; 3]` | Minecraft block coordinate at Blender world origin |
 
 ## Minecraft control packets
 

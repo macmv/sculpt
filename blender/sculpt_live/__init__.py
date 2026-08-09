@@ -13,6 +13,7 @@ bl_info = {
 from .operators import (
     CLIVE_OT_add_material,
     CLIVE_OT_add_feature,
+    CLIVE_OT_clear_aabb,
     CLIVE_OT_move_material,
     CLIVE_OT_publish_snapshot,
     CLIVE_OT_remove_material,
@@ -33,6 +34,7 @@ CLASSES = (
     CLIVE_OT_remove_material,
     CLIVE_OT_add_feature,
     CLIVE_OT_remove_feature,
+    CLIVE_OT_clear_aabb,
     CLIVE_OT_use_material_brush,
     CLIVE_OT_move_material,
     CLIVE_OT_publish_snapshot,

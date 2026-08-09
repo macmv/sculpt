@@ -12,9 +12,11 @@ from mathutils import Vector
 
 
 MAGIC = b"SCLP"
+CLEAR_MAGIC = b"SCLC"
 FULL_SNAPSHOT = 1
 # SCLP's header is fixed at 132 bytes; see ../protocol.md.
 HEADER = struct.Struct("<4sHQIII16f6ff3iH")
+CLEAR_REGION = struct.Struct("<4sQ6ff3i")
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,25 @@ def _world_bounds(evaluated) -> tuple[float, float, float, float, float, float]:
         max(point.x for point in points),
         max(point.y for point in points),
         max(point.z for point in points),
+    )
+
+
+def build_clear_region(evaluated, revision: int, settings) -> bytes:
+    """Serialize a request that replaces the evaluated object's AABB with air."""
+    if revision < 1:
+        raise ValueError("clear revision must be positive")
+    units_per_block = settings.blender_units_per_block
+    if not math.isfinite(units_per_block) or units_per_block <= 0:
+        raise ValueError("Blender Units per Block must be positive")
+    bounds = _world_bounds(evaluated)
+    if not all(math.isfinite(value) for value in (*bounds, units_per_block)):
+        raise ValueError("mesh bounds must contain only finite values")
+    return CLEAR_REGION.pack(
+        CLEAR_MAGIC,
+        revision,
+        *bounds,
+        units_per_block,
+        *settings.minecraft_origin,
     )
 
 

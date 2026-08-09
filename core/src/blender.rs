@@ -1,8 +1,10 @@
 use std::{error::Error, fmt, io::Read};
 
 const MAGIC: [u8; 4] = *b"SCLP";
+const CLEAR_MAGIC: [u8; 4] = *b"SCLC";
 const HEADER_SIZE: usize = 132;
 const FULL_SNAPSHOT_FLAG: u32 = 1;
+const CLEAR_REGION_SIZE: usize = 52;
 const MAX_FRAME_SIZE: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
@@ -18,6 +20,19 @@ pub struct MeshSnapshot {
   pub materials:        Vec<Material>,
   pub vertices:         Vec<[f32; 3]>,
   pub triangles:        Vec<Triangle>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ClearRegion {
+  pub revision:         u64,
+  pub world_aabb:       [f32; 6],
+  pub units_per_block:  f32,
+  pub minecraft_origin: [i32; 3],
+}
+
+pub enum PublisherMessage {
+  Snapshot(MeshSnapshot),
+  Clear(ClearRegion),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,6 +311,44 @@ pub fn parse_mesh_snapshot(body: &[u8]) -> Result<MeshSnapshot, MessageError> {
   })
 }
 
+/// Parses either a complete mesh snapshot or an AABB clear request.
+pub fn parse_publisher_message(body: &[u8]) -> Result<PublisherMessage, MessageError> {
+  match body.get(..4) {
+    Some(b"SCLP") => parse_mesh_snapshot(body).map(PublisherMessage::Snapshot),
+    Some(b"SCLC") => parse_clear_region(body).map(PublisherMessage::Clear),
+    _ => Err(MessageError("incorrect message magic".into())),
+  }
+}
+
+fn parse_clear_region(body: &[u8]) -> Result<ClearRegion, MessageError> {
+  if body.len() != CLEAR_REGION_SIZE {
+    return Err(MessageError(format!(
+      "clear region message length is {}, expected {CLEAR_REGION_SIZE}",
+      body.len()
+    )));
+  }
+  if body[..4] != CLEAR_MAGIC {
+    return Err(MessageError("incorrect clear region magic".into()));
+  }
+  let revision = read_u64(body, 4);
+  if revision == 0 {
+    return Err(MessageError("clear revision must be positive".into()));
+  }
+  let world_aabb = read_f32_array::<6>(body, 12);
+  let units_per_block = read_f32(body, 36);
+  let minecraft_origin = read_i32_array::<3>(body, 40);
+  validate_finite("clear AABB", &world_aabb)?;
+  validate_finite("units per block", &[units_per_block])?;
+  if units_per_block <= 0.0 {
+    return Err(MessageError("units per block must be positive".into()));
+  }
+  if world_aabb[0] > world_aabb[3] || world_aabb[1] > world_aabb[4] || world_aabb[2] > world_aabb[5]
+  {
+    return Err(MessageError("clear AABB minimum exceeds its maximum".into()));
+  }
+  Ok(ClearRegion { revision, world_aabb, units_per_block, minecraft_origin })
+}
+
 fn message_error(message: String) -> ReadError { ReadError::Message(MessageError(message)) }
 
 fn validate_finite(name: &str, values: &[f32]) -> Result<(), MessageError> {
@@ -403,6 +456,27 @@ mod tests {
     );
     assert_eq!(mesh.units_per_block, 2.5);
     assert_eq!(mesh.minecraft_origin, [100, 64, -20]);
+  }
+
+  #[test]
+  fn parses_a_clear_region() {
+    let mut message = Vec::with_capacity(CLEAR_REGION_SIZE);
+    message.extend_from_slice(&CLEAR_MAGIC);
+    message.extend_from_slice(&8_u64.to_le_bytes());
+    for value in [1.0_f32, 2.0, 3.0, 4.0, 5.0, 6.0] {
+      message.extend_from_slice(&value.to_le_bytes());
+    }
+    message.extend_from_slice(&2.5_f32.to_le_bytes());
+    for value in [100_i32, 64, -20] {
+      message.extend_from_slice(&value.to_le_bytes());
+    }
+    let PublisherMessage::Clear(clear) = parse_publisher_message(&message).unwrap() else {
+      panic!("expected a clear region");
+    };
+    assert_eq!(clear.revision, 8);
+    assert_eq!(clear.world_aabb, [1., 2., 3., 4., 5., 6.]);
+    assert_eq!(clear.units_per_block, 2.5);
+    assert_eq!(clear.minecraft_origin, [100, 64, -20]);
   }
 
   #[test]

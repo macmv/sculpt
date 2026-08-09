@@ -22,6 +22,7 @@ const SUBSCRIBER_QUEUE_CAPACITY: usize = 16_384;
 
 enum CoreEvent {
   Snapshot(blender::MeshSnapshot),
+  Clear(blender::ClearRegion),
   Subscribe { subscriber: minecraft::MinecraftSubscriber, outgoing: SyncSender<OutgoingDelta> },
 }
 
@@ -72,7 +73,7 @@ fn receive_connection(mut stream: UnixStream, sender: mpsc::Sender<CoreEvent>) {
   };
 
   match first.get(..4) {
-    Some(b"SCLP") => receive_snapshots(stream, first, sender),
+    Some(b"SCLP" | b"SCLC") => receive_snapshots(stream, first, sender),
     Some(b"SCLM") => receive_subscriber(stream, first, sender),
     _ => log::warn!("discarded connection with unknown initial packet"),
   }
@@ -96,9 +97,14 @@ fn receive_snapshots(mut stream: UnixStream, first: Vec<u8>, sender: mpsc::Sende
       },
     };
 
-    match blender::parse_mesh_snapshot(&bytes) {
-      Ok(snapshot) => {
+    match blender::parse_publisher_message(&bytes) {
+      Ok(blender::PublisherMessage::Snapshot(snapshot)) => {
         if sender.send(CoreEvent::Snapshot(snapshot)).is_err() {
+          return;
+        }
+      }
+      Ok(blender::PublisherMessage::Clear(clear)) => {
+        if sender.send(CoreEvent::Clear(clear)).is_err() {
           return;
         }
       }
@@ -197,6 +203,40 @@ fn process_events(receiver: Receiver<CoreEvent>) {
           snapshot.vertices.len(),
           snapshot.triangles.len()
         );
+      }
+      CoreEvent::Clear(clear) => {
+        if latest_revision.is_some_and(|revision| clear.revision <= revision) {
+          log::warn!("discarded stale Blender clear revision {}", clear.revision);
+          continue;
+        }
+        subscribers.retain_mut(|entry| {
+          if let Err(error) = topology::clear_region(clear, entry.subscriber.state_mut()) {
+            log::warn!(
+              "failed to clear Minecraft subscriber for revision {}: {error}",
+              clear.revision
+            );
+            return true;
+          }
+          let changed_sections = entry.subscriber.enqueue_modified_sections(clear.revision);
+          for (position, payload) in entry.subscriber.take_pending() {
+            let delta = OutgoingDelta { revision: clear.revision, position, payload };
+            match entry.outgoing.try_send(delta) {
+              Ok(()) => {}
+              Err(TrySendError::Full(_)) => log::warn!(
+                "Minecraft subscriber queue is full while clearing revision {}",
+                clear.revision
+              ),
+              Err(TrySendError::Disconnected(_)) => return false,
+            }
+          }
+          log::info!(
+            "cleared AABB for revision {} ({} changed sections)",
+            clear.revision,
+            changed_sections
+          );
+          true
+        });
+        latest_revision = Some(clear.revision);
       }
     }
   }

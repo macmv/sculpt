@@ -88,6 +88,7 @@ class CLIVE_PT_panel(bpy.types.Panel):
                     features.prop(feature, "canopy_radius")
         layout.separator()
         layout.operator("sculpt_live.publish_snapshot", icon="EXPORT")
+        layout.operator("sculpt_live.clear_aabb", icon="TRASH")
         layout.label(text=f"Last revision: {settings.revision}")
         if settings.last_snapshot_bytes:
             layout.label(text=f"Snapshot size: {settings.last_snapshot_bytes:,} bytes")
