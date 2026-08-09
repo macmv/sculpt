@@ -32,6 +32,10 @@ pub enum RegistryError {
   TooLarge,
   EmptyState,
   DuplicateState(String),
+  EmptyDefaultState,
+  DuplicateDefaultState(String),
+  DefaultStateOutOfRange(u16),
+  DefaultStateConflictsWithRegistry(String),
   MissingAir,
 }
 impl fmt::Display for RegistryError {
@@ -43,6 +47,16 @@ impl fmt::Display for RegistryError {
       }
       Self::EmptyState => f.write_str("registry contains an empty state"),
       Self::DuplicateState(s) => write!(f, "registry contains duplicate state {s:?}"),
+      Self::EmptyDefaultState => f.write_str("registry contains an empty default state name"),
+      Self::DuplicateDefaultState(s) => {
+        write!(f, "registry contains duplicate default state {s:?}")
+      }
+      Self::DefaultStateOutOfRange(id) => {
+        write!(f, "default state refers to unknown global state ID {id}")
+      }
+      Self::DefaultStateConflictsWithRegistry(s) => {
+        write!(f, "default state {s:?} conflicts with a canonical registry state")
+      }
       Self::MissingAir => f.write_str("registry does not contain minecraft:air"),
     }
   }
@@ -86,6 +100,12 @@ pub struct MinecraftState {
 }
 impl MinecraftState {
   pub fn new(registry: Vec<String>) -> Result<Self, RegistryError> {
+    Self::with_default_states(registry, Vec::new())
+  }
+  fn with_default_states(
+    registry: Vec<String>,
+    default_states: Vec<(String, u16)>,
+  ) -> Result<Self, RegistryError> {
     if registry.is_empty() {
       return Err(RegistryError::Empty);
     }
@@ -102,6 +122,20 @@ impl MinecraftState {
       }
     }
     let air = *ids.get("minecraft:air").ok_or(RegistryError::MissingAir)?;
+    for (name, id) in default_states {
+      if name.is_empty() {
+        return Err(RegistryError::EmptyDefaultState);
+      }
+      if id as usize >= registry.len() {
+        return Err(RegistryError::DefaultStateOutOfRange(id));
+      }
+      if ids.contains_key(&name) {
+        return Err(RegistryError::DefaultStateConflictsWithRegistry(name));
+      }
+      if ids.insert(name.clone(), BlockId(id)).is_some() {
+        return Err(RegistryError::DuplicateDefaultState(name));
+      }
+    }
     Ok(Self { names: registry, ids, air, sections: HashMap::new(), modified: HashSet::new() })
   }
   pub fn lookup(&self, state: &str) -> Result<BlockId, LookupError> {
@@ -154,10 +188,28 @@ pub fn parse_hello(payload: &[u8]) -> Result<MinecraftState, HelloError> {
     registry.push(std::str::from_utf8(bytes).map_err(|_| HelloError::InvalidUtf8)?.to_owned());
     offset += len;
   }
+  if payload.len() < offset + 2 {
+    return Err(HelloError::Truncated);
+  }
+  let default_count = u16::from_le_bytes([payload[offset], payload[offset + 1]]) as usize;
+  offset += 2;
+  let mut default_states = Vec::with_capacity(default_count);
+  for _ in 0..default_count {
+    if payload.len() < offset + 4 {
+      return Err(HelloError::Truncated);
+    }
+    let id = u16::from_le_bytes([payload[offset], payload[offset + 1]]);
+    let len = u16::from_le_bytes([payload[offset + 2], payload[offset + 3]]) as usize;
+    offset += 4;
+    let bytes = payload.get(offset..offset + len).ok_or(HelloError::Truncated)?;
+    default_states
+      .push((std::str::from_utf8(bytes).map_err(|_| HelloError::InvalidUtf8)?.to_owned(), id));
+    offset += len;
+  }
   if offset != payload.len() {
     return Err(HelloError::TrailingBytes);
   }
-  MinecraftState::new(registry).map_err(HelloError::Registry)
+  MinecraftState::with_default_states(registry, default_states).map_err(HelloError::Registry)
 }
 pub fn welcome() -> [u8; 8] { *b"SCLW\0\0\0\0" }
 pub struct MinecraftSubscriber {
@@ -241,6 +293,18 @@ mod tests {
       v.extend_from_slice(&(n.len() as u16).to_le_bytes());
       v.extend_from_slice(n.as_bytes())
     }
+    v.extend_from_slice(&0_u16.to_le_bytes());
+    v
+  }
+  fn hello_with_defaults(names: &[&str], defaults: &[(u16, &str)]) -> Vec<u8> {
+    let mut v = hello(names);
+    v.truncate(v.len() - 2);
+    v.extend_from_slice(&(defaults.len() as u16).to_le_bytes());
+    for (id, name) in defaults {
+      v.extend_from_slice(&id.to_le_bytes());
+      v.extend_from_slice(&(name.len() as u16).to_le_bytes());
+      v.extend_from_slice(name.as_bytes());
+    }
     v
   }
   #[test]
@@ -248,6 +312,33 @@ mod tests {
     assert_eq!(parse_hello(&hello(&["minecraft:air"])).unwrap().air(), BlockId(0));
     assert!(parse_hello(&hello(&[])).is_err());
     assert!(parse_hello(&hello(&["minecraft:air", "minecraft:air"])).is_err());
+  }
+  #[test]
+  fn lookup_accepts_explicit_default_property_variant() {
+    let state = parse_hello(&hello_with_defaults(
+      &["minecraft:air", "minecraft:oak_leaves[distance=7,persistent=false,waterlogged=false]"],
+      &[(1, "minecraft:oak_leaves")],
+    ))
+    .unwrap();
+    assert_eq!(state.lookup("minecraft:oak_leaves").unwrap(), BlockId(1));
+    assert_eq!(
+      state.lookup("minecraft:oak_leaves[distance=7,persistent=false,waterlogged=false]").unwrap(),
+      BlockId(1)
+    );
+  }
+  #[test]
+  fn hello_rejects_invalid_default_state_mappings() {
+    assert!(
+      parse_hello(&hello_with_defaults(&["minecraft:air"], &[(1, "minecraft:oak_leaves")]))
+        .is_err()
+    );
+    assert!(
+      parse_hello(&hello_with_defaults(
+        &["minecraft:air", "minecraft:oak_leaves[distance=7]"],
+        &[(1, "minecraft:oak_leaves"), (1, "minecraft:oak_leaves")],
+      ))
+      .is_err()
+    );
   }
   #[test]
   fn order_and_header() {

@@ -23,10 +23,24 @@ internal object Protocol {
     }
     require(states.size in 1..(1 shl 15)) { "Invalid block-state registry size" }
     val encoded = states.map { it.toByteArray(StandardCharsets.UTF_8) }
+    val defaults = BuiltInRegistries.BLOCK.mapNotNull { block ->
+      val state = block.defaultBlockState()
+      if (state.properties.isEmpty()) null else {
+        val id = Block.BLOCK_STATE_REGISTRY.getId(state)
+        require(id >= 0) { "Missing global block-state ID for default state of $block" }
+        BuiltInRegistries.BLOCK.getKey(block).toString().toByteArray(StandardCharsets.UTF_8) to id
+      }
+    }
     require(encoded.all { it.isNotEmpty() && it.size <= 0xffff }) { "Invalid block-state registry entry" }
-    return ByteBuffer.allocate(6 + encoded.sumOf { 2 + it.size }).order(ByteOrder.LITTLE_ENDIAN)
+    require(defaults.size <= 0xffff && defaults.all { (name, _) -> name.isNotEmpty() && name.size <= 0xffff }) {
+      "Invalid default block-state registry entry"
+    }
+    return ByteBuffer.allocate(8 + encoded.sumOf { 2 + it.size } + defaults.sumOf { (name, _) -> 4 + name.size })
+      .order(ByteOrder.LITTLE_ENDIAN)
       .put("SCLM".toByteArray(StandardCharsets.US_ASCII)).putShort(states.size.toShort()).also { output ->
         encoded.forEach { output.putShort(it.size.toShort()).put(it) }
+        output.putShort(defaults.size.toShort())
+        defaults.forEach { (name, id) -> output.putShort(id.toShort()).putShort(name.size.toShort()).put(name) }
       }.array()
   }
 

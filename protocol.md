@@ -73,12 +73,19 @@ qualifying top surfaces.
 | 0 | `[u8; 4]` | ASCII `SCLM` |
 | 4 | `u16` | State count, 1–32768 |
 | … | repeated | `u16` UTF-8 byte length + canonical block-state string |
+| … | `u16` | Default-variant count |
+| … | repeated | `u16` global state ID + `u16` UTF-8 byte length + bare block name |
 
 The registry is the complete global block-state registry in Minecraft runtime
 ID order (ID zero first). It must contain `minecraft:air`, may not contain an
-empty or duplicate string, and must consume the frame exactly. Core uses this
-ordering directly as the global palette ID and rejects registries beyond the
-15-bit direct-palette range.
+empty or duplicate string, and must consume the frame exactly. The default
+variant table contains one entry for every block with properties: its bare
+block name maps to the global ID of `defaultBlockState()`. Its names may not
+be empty or duplicate canonical state names, and its IDs must be in range.
+This lets material definitions use `minecraft:oak_leaves` instead of spelling
+out its default properties. Core uses the canonical registry ordering directly
+as the global palette ID and rejects registries beyond the 15-bit direct-palette
+range.
 The registry is connection-local and remains valid until that subscriber
 disconnects; a changed registry requires a new connection.
 
