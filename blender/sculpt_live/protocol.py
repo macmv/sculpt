@@ -88,19 +88,27 @@ def build_mesh_snapshot(_source, evaluated, mesh, revision: int, settings) -> Me
         raise ValueError("Blender Units per Block must be positive")
     materials = settings.materials
     if not materials:
-        raise ValueError("add at least one Painted Block Color")
+        raise ValueError("add at least one Painted Material")
     if len(materials) > 0xFFFF:
-        raise ValueError("too many Painted Block Colors")
+        raise ValueError("too many Painted Materials")
     material_table = bytearray()
     for material in materials:
-        state = material.block_state.strip()
-        encoded = state.encode("utf-8")
-        if not state:
-            raise ValueError("Minecraft Block cannot be empty")
-        if len(encoded) > 0xFFFF:
+        base_block = material.base_block.strip()
+        underground_block = material.underground_block.strip()
+        if not base_block or not underground_block:
+            raise ValueError("material block names cannot be empty")
+        base_encoded = base_block.encode("utf-8")
+        underground_encoded = underground_block.encode("utf-8")
+        if len(base_encoded) > 0xFFFF or len(underground_encoded) > 0xFFFF:
             raise ValueError("Minecraft Block name is too long")
-        material_table.extend(struct.pack("<H", len(encoded)))
-        material_table.extend(encoded)
+        depth = material.base_depth
+        if not isinstance(depth, int) or not 0 < depth <= 0xFFFF:
+            raise ValueError("Base Layer Depth must be between 1 and 65535")
+        material_table.extend(struct.pack("<H", len(base_encoded)))
+        material_table.extend(base_encoded)
+        material_table.extend(struct.pack("<H", len(underground_encoded)))
+        material_table.extend(underground_encoded)
+        material_table.extend(struct.pack("<H", depth))
 
     positions = array("f")
     for vertex in mesh.vertices:

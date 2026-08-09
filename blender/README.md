@@ -16,15 +16,18 @@ builds a compact binary full-mesh snapshot and sends it to the configured Unix
 domain socket. A revision advances only after the complete frame is written.
 See `../protocol.md` for the wire format.
 
-## Painted block materials
+## Painted Materials
 
-In the add-on panel, use **Painted Block Colors** to associate a color with a
-canonical Minecraft block state such as `minecraft:stone` or `minecraft:dirt`.
+In the add-on panel, use **Painted Materials** to associate a paint color with
+a base block, underground block, and positive base-layer depth. For example, a
+grass-like material can use `minecraft:grass_block` over `minecraft:dirt` with
+a depth of one or more blocks.
 The Sculpt workspace's **Paint** brush paints the mesh's active color attribute
 (vertex/corner color data); it does not assign Blender material slots and is not
 texture paint. On publish, each polygon is matched to the nearest configured
-color and the voxel service uses the associated block state for the solid volume
-behind that painted surface. Add at least one mapping before publishing.
+color and the voxel service uses the selected material for that solid column:
+the topmost `base_depth` solid blocks use its base block and deeper blocks use
+its underground block. Add at least one material before publishing.
 The intended transport is a Unix domain socket at `/tmp/sculpt-live.sock`, with
 length-prefixed binary messages. Do not send mesh geometry as JSON.
 

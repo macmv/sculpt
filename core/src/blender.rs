@@ -14,10 +14,17 @@ pub struct MeshSnapshot {
   pub units_per_block:  f32,
   /// Minecraft block coordinate corresponding to the Blender world origin.
   pub minecraft_origin: [i32; 3],
-  /// Block-state names indexed by each triangle's painted material ID.
-  pub materials:        Vec<String>,
+  /// Terrain definitions indexed by each triangle's painted material ID.
+  pub materials:        Vec<Material>,
   pub vertices:         Vec<[f32; 3]>,
   pub triangles:        Vec<Triangle>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Material {
+  pub base_block:        String,
+  pub underground_block: String,
+  pub base_depth:        u16,
 }
 
 #[derive(Debug, Clone)]
@@ -95,16 +102,42 @@ pub fn parse_mesh_snapshot(body: &[u8]) -> Result<MeshSnapshot, MessageError> {
     }
     let length = read_u16(body, offset) as usize;
     offset += 2;
-    let name = body
+    let base_block = body
       .get(offset..offset + length)
-      .ok_or_else(|| MessageError("truncated material name".into()))?;
-    let name = std::str::from_utf8(name)
-      .map_err(|_| MessageError("material name contains invalid UTF-8".into()))?;
-    if name.is_empty() {
-      return Err(MessageError("material name is empty".into()));
+      .ok_or_else(|| MessageError("truncated material base block".into()))?;
+    let base_block = std::str::from_utf8(base_block)
+      .map_err(|_| MessageError("material base block contains invalid UTF-8".into()))?;
+    if base_block.is_empty() {
+      return Err(MessageError("material base block is empty".into()));
     }
-    materials.push(name.to_owned());
     offset += length;
+    if offset + 2 > body.len() {
+      return Err(MessageError("truncated material underground block length".into()));
+    }
+    let length = read_u16(body, offset) as usize;
+    offset += 2;
+    let underground_block = body
+      .get(offset..offset + length)
+      .ok_or_else(|| MessageError("truncated material underground block".into()))?;
+    let underground_block = std::str::from_utf8(underground_block)
+      .map_err(|_| MessageError("material underground block contains invalid UTF-8".into()))?;
+    if underground_block.is_empty() {
+      return Err(MessageError("material underground block is empty".into()));
+    }
+    offset += length;
+    if offset + 2 > body.len() {
+      return Err(MessageError("truncated material base depth".into()));
+    }
+    let base_depth = read_u16(body, offset);
+    if base_depth == 0 {
+      return Err(MessageError("material base depth must be positive".into()));
+    }
+    offset += 2;
+    materials.push(Material {
+      base_block: base_block.to_owned(),
+      underground_block: underground_block.to_owned(),
+      base_depth,
+    });
   }
   if materials.is_empty() {
     return Err(MessageError("material table is empty".into()));
@@ -258,8 +291,7 @@ mod tests {
       message[118 + index * 4..122 + index * 4].copy_from_slice(&coordinate.to_le_bytes());
     }
     message[130..132].copy_from_slice(&1_u16.to_le_bytes());
-    message.extend_from_slice(&15_u16.to_le_bytes());
-    message.extend_from_slice(b"minecraft:stone");
+    material(&mut message, "minecraft:stone", "minecraft:stone", 1);
     for value in [0.0_f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
       message.extend_from_slice(&value.to_le_bytes());
     }
@@ -270,7 +302,17 @@ mod tests {
     message
   }
 
-  fn vertex_offset() -> usize { HEADER_SIZE + 2 + b"minecraft:stone".len() }
+  fn material(message: &mut Vec<u8>, base: &str, underground: &str, depth: u16) {
+    message.extend_from_slice(&(base.len() as u16).to_le_bytes());
+    message.extend_from_slice(base.as_bytes());
+    message.extend_from_slice(&(underground.len() as u16).to_le_bytes());
+    message.extend_from_slice(underground.as_bytes());
+    message.extend_from_slice(&depth.to_le_bytes());
+  }
+
+  fn vertex_offset() -> usize {
+    HEADER_SIZE + 2 + b"minecraft:stone".len() + 2 + b"minecraft:stone".len() + 2
+  }
 
   #[test]
   fn parses_a_valid_mesh_snapshot() {
@@ -280,7 +322,14 @@ mod tests {
     assert_eq!(mesh.triangles.len(), 1);
     assert_eq!(mesh.triangles[0].indices, [0, 1, 2]);
     assert_eq!(mesh.triangles[0].material_id, 0);
-    assert_eq!(mesh.materials, ["minecraft:stone"]);
+    assert_eq!(
+      mesh.materials,
+      [Material {
+        base_block:        "minecraft:stone".into(),
+        underground_block: "minecraft:stone".into(),
+        base_depth:        1,
+      }]
+    );
     assert_eq!(mesh.units_per_block, 2.5);
     assert_eq!(mesh.minecraft_origin, [100, 64, -20]);
   }
@@ -338,6 +387,31 @@ mod tests {
     let index_offset = vertex_offset() + 3 * 3 * size_of::<f32>();
     message[index_offset..index_offset + 4].copy_from_slice(&3_u32.to_le_bytes());
     assert!(parse_mesh_snapshot(&message).is_err());
+  }
+
+  #[test]
+  fn rejects_invalid_material_definitions_and_indices() {
+    let mut empty_base = valid_message();
+    empty_base[HEADER_SIZE..HEADER_SIZE + 2].copy_from_slice(&0_u16.to_le_bytes());
+    assert!(
+      parse_mesh_snapshot(&empty_base).unwrap_err().to_string().contains("base block is empty")
+    );
+
+    let mut invalid_utf8 = valid_message();
+    invalid_utf8[HEADER_SIZE + 2] = 0xff;
+    assert!(parse_mesh_snapshot(&invalid_utf8).unwrap_err().to_string().contains("invalid UTF-8"));
+
+    let mut zero_depth = valid_message();
+    let depth = vertex_offset() - 2;
+    zero_depth[depth..vertex_offset()].copy_from_slice(&0_u16.to_le_bytes());
+    assert!(parse_mesh_snapshot(&zero_depth).unwrap_err().to_string().contains("base depth"));
+
+    let mut bad_id = valid_message();
+    let material_id = bad_id.len() - size_of::<u32>();
+    bad_id[material_id..].copy_from_slice(&1_u32.to_le_bytes());
+    assert!(
+      parse_mesh_snapshot(&bad_id).unwrap_err().to_string().contains("out-of-range material")
+    );
   }
 
   #[test]

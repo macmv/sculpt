@@ -143,10 +143,18 @@ unpredictable behavior.
 Shape and block selection are separate concerns.
 
 - The mesh determines solid versus air.
-- Face materials and/or vertex-color masks can select block families.
-- Rules can resolve terrain layering: grass on exposed upward-facing surfaces,
-  dirt for a shallow depth, stone below, and snow based on elevation/slope.
-- Explicit painting should override procedural material rules.
+- Each scene-owned painted material defines a base block, an underground block,
+  a positive base-layer depth, and a list of surface features. The complete
+  definitions are embedded in every Blender snapshot.
+- Blender's active vertex/corner paint color selects the nearest painted
+  material for each polygon.
+- Core applies the selected material by Minecraft X/Z column: the topmost
+  solid block and the next `base-layer depth - 1` solid blocks use the base
+  block; deeper solid blocks use the underground block. Air remains air.
+- Surface features are deferred. A future `scatter` feature will place its
+  configured blocks around qualifying material surfaces, and a future `tree`
+  feature will place its configured trees around qualifying material surfaces.
+  The first implementation emits neither scatter nor tree blocks.
 
 ## Minecraft application
 

@@ -6,17 +6,28 @@ import bpy
 class CLIVE_PG_material(bpy.types.PropertyGroup):
     color: bpy.props.FloatVectorProperty(
         name="Paint Color",
-        description="Sculpt Paint color that selects this Minecraft block",
+        description="Sculpt Paint color that selects this Minecraft terrain material",
         subtype="COLOR",
         size=4,
         min=0.0,
         max=1.0,
         default=(0.5, 0.5, 0.5, 1.0),
     )
-    block_state: bpy.props.StringProperty(
-        name="Minecraft Block",
-        description="Canonical Minecraft block state, for example minecraft:stone",
-        default="minecraft:stone",
+    base_block: bpy.props.StringProperty(
+        name="Base Block",
+        description="Canonical Minecraft state used for the terrain surface, for example minecraft:grass_block",
+        default="minecraft:grass_block",
+    )
+    underground_block: bpy.props.StringProperty(
+        name="Underground Block",
+        description="Canonical Minecraft state used below the base layer, for example minecraft:dirt",
+        default="minecraft:dirt",
+    )
+    base_depth: bpy.props.IntProperty(
+        name="Base Layer Depth",
+        description="Number of vertical solid blocks, including the surface, that use Base Block",
+        default=1,
+        min=1,
     )
 
 

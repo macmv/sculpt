@@ -30,8 +30,8 @@ coordinates.
 
 ## Blender publisher to core: `SCLP`
 
-`SCLP` remains the existing mesh-snapshot packet so current Blender transport
-is compatible. Its body is:
+`SCLP` is the mesh-snapshot packet. Its painted-material table is intentionally
+updated alongside the local Blender encoder and Rust decoder. Its body is:
 
 | Offset | Type | Field |
 | --- | --- | --- |
@@ -46,14 +46,14 @@ is compatible. Its body is:
 | 114 | `f32` | Blender world units per Minecraft block |
 | 118 | `[i32; 3]` | Minecraft block coordinate at Blender world origin |
 | 130 | `u16` | Painted material count |
-| 132 | repeated | `u16` UTF-8 byte length + canonical Minecraft block-state string |
+| 132 | repeated | `u16` base-state byte length + UTF-8 base state, `u16` underground-state byte length + UTF-8 underground state, `u16` positive base-layer depth |
 | … | `[f32; vertex_count * 3]` | Local-space vertex positions, xyz |
 | … | `[u32; triangle_count * 3]` | Triangle vertex indices |
 | … | `[u32; triangle_count]` | Painted-material index per triangle |
 
-The core validates finite values, dimensions, material names and indices, index bounds, and revision before
+The core validates finite values, dimensions, non-empty material state names, positive layer depths, material indices, index bounds, and revision before
 accepting the snapshot. Blender selects the material index by matching each
-polygon's active color attribute to its configured painted block color. A Blender world point `(x, y, z)` maps
+polygon's active color attribute to its configured painted material color. A Blender world point `(x, y, z)` maps
 to `(origin_x + x / units, origin_y + z / units, origin_z - y / units)` in
 Minecraft block coordinates.
 

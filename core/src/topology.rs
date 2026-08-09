@@ -5,7 +5,7 @@ use std::{collections::HashMap, error::Error, fmt};
 
 use crate::{
   blender::MeshSnapshot,
-  minecraft::{BlockPos, MinecraftState},
+  minecraft::{BlockId, BlockPos, MinecraftState},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,13 +54,29 @@ pub fn reconcile(
     Some(region) => validate_region(region)?,
     None => mesh.default_region()?,
   };
+  // Resolve every configured state before writing anything so a registry error
+  // cannot leave a partially updated terrain region.
   let materials: Vec<_> = snapshot
     .materials
     .iter()
-    .map(|name| state.lookup(name).map_err(|_| TopologyError::UnknownMaterial(name.clone())))
+    .map(|material| {
+      Ok(ResolvedMaterial {
+        base:        state
+          .lookup(&material.base_block)
+          .map_err(|_| TopologyError::UnknownMaterial(material.base_block.clone()))?,
+        underground: state
+          .lookup(&material.underground_block)
+          .map_err(|_| TopologyError::UnknownMaterial(material.underground_block.clone()))?,
+        base_depth:  material.base_depth,
+      })
+    })
     .collect::<Result<_, _>>()?;
   let air = state.air();
   let bvh = Bvh::new(&mesh.triangles);
+  let width = (region.max.x as i64 - region.min.x as i64 + 1) as usize;
+  let height = (region.max.y as i64 - region.min.y as i64 + 1) as usize;
+  let depth = (region.max.z as i64 - region.min.z as i64 + 1) as usize;
+  let mut selected = vec![None; width * height * depth];
 
   for y in region.min.y..=region.max.y {
     for z in region.min.z..=region.max.z {
@@ -75,17 +91,63 @@ pub fn reconcile(
         let center = x as f64 + 0.5;
         while hit < hits.len() && hits[hit].0 < center {
           if hit % 2 == 0 {
-            layers.push(materials[mesh.triangles[hits[hit].1].material_id as usize]);
+            layers.push(mesh.triangles[hits[hit].1].material_id as usize);
           } else {
             layers.pop();
           }
           hit += 1;
         }
-        state.set(BlockPos { x, y, z }, layers.last().copied().unwrap_or(air));
+        let index = ((y - region.min.y) as usize * depth + (z - region.min.z) as usize) * width
+          + (x - region.min.x) as usize;
+        selected[index] = layers.last().copied();
+      }
+    }
+  }
+  // Layering is vertical in Minecraft coordinates, not along a face normal.
+  // That keeps cave walls and side faces from receiving surface blocks.
+  for z in 0..depth {
+    for x in 0..width {
+      let mut top_material = None;
+      let mut solid_depth = 0_u16;
+      for y in (0..height).rev() {
+        let index = (y * depth + z) * width + x;
+        let pos = BlockPos {
+          x: region.min.x + x as i32,
+          y: region.min.y + y as i32,
+          z: region.min.z + z as i32,
+        };
+        match selected[index] {
+          Some(material) => {
+            let material = if let Some(material) = top_material {
+              material
+            } else {
+              top_material = Some(material);
+              material
+            };
+            let definition = materials[material];
+            let block = if solid_depth < definition.base_depth {
+              definition.base
+            } else {
+              definition.underground
+            };
+            state.set(pos, block);
+            solid_depth = solid_depth.saturating_add(1);
+          }
+          None => {
+            state.set(pos, air);
+          }
+        }
       }
     }
   }
   Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct ResolvedMaterial {
+  base:        BlockId,
+  underground: BlockId,
+  base_depth:  u16,
 }
 
 fn validate_region(region: BlockRegion) -> Result<BlockRegion, TopologyError> {
@@ -176,10 +238,17 @@ impl Mesh {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::blender::Triangle;
+  use crate::blender::{Material, Triangle};
 
   fn state() -> MinecraftState {
-    MinecraftState::new(vec!["minecraft:air".into(), "minecraft:stone".into()]).unwrap()
+    MinecraftState::new(vec![
+      "minecraft:air".into(),
+      "minecraft:stone".into(),
+      "minecraft:grass_block".into(),
+      "minecraft:dirt".into(),
+      "minecraft:sand".into(),
+    ])
+    .unwrap()
   }
   fn cube() -> MeshSnapshot {
     // These local coordinates map to Minecraft x/y/z respectively as x/z/-y.
@@ -214,7 +283,11 @@ mod tests {
       dirty_aabb: [0.; 6],
       units_per_block: 1.,
       minecraft_origin: [0; 3],
-      materials: vec!["minecraft:stone".into()],
+      materials: vec![Material {
+        base_block:        "minecraft:stone".into(),
+        underground_block: "minecraft:stone".into(),
+        base_depth:        1,
+      }],
       vertices,
       triangles: faces.into_iter().map(|indices| Triangle { indices, material_id: 0 }).collect(),
     }
@@ -259,6 +332,59 @@ mod tests {
     mesh.triangles.pop();
     assert!(reconcile(&mesh, None, &mut s).is_err());
     assert_eq!(s.get(BlockPos { x: 4, y: 4, z: 4 }), stone);
+  }
+
+  #[test]
+  fn layers_each_column_using_its_topmost_material() {
+    let mut s = state();
+    let mut mesh = cube();
+    // Make this a four-block-tall cube and paint its top face grass-like.
+    for vertex in &mut mesh.vertices {
+      if vertex[2] == 1. {
+        vertex[2] = 4.;
+      }
+    }
+    mesh.materials = vec![
+      Material {
+        base_block:        "minecraft:grass_block".into(),
+        underground_block: "minecraft:dirt".into(),
+        base_depth:        2,
+      },
+      Material {
+        base_block:        "minecraft:sand".into(),
+        underground_block: "minecraft:stone".into(),
+        base_depth:        1,
+      },
+    ];
+    // The x=0 side is the entering surface for the +X classification ray.
+    mesh.triangles[8].material_id = 0;
+    mesh.triangles[9].material_id = 0;
+    let mut adjacent = mesh.clone();
+    for vertex in &mut adjacent.vertices {
+      vertex[0] += 2.;
+    }
+    let vertex_offset = mesh.vertices.len() as u32;
+    mesh.vertices.extend(adjacent.vertices);
+    mesh.triangles.extend(adjacent.triangles.into_iter().map(|mut triangle| {
+      triangle.indices = triangle.indices.map(|index| index + vertex_offset);
+      triangle.material_id = if triangle.material_id == 0 { 1 } else { triangle.material_id };
+      triangle
+    }));
+    reconcile(
+      &mesh,
+      Some(BlockRegion { min: BlockPos { x: 0, y: 0, z: 0 }, max: BlockPos { x: 2, y: 3, z: 0 } }),
+      &mut s,
+    )
+    .unwrap();
+    let grass = s.lookup("minecraft:grass_block").unwrap();
+    let dirt = s.lookup("minecraft:dirt").unwrap();
+    let sand = s.lookup("minecraft:sand").unwrap();
+    let stone = s.lookup("minecraft:stone").unwrap();
+    assert_eq!(s.get(BlockPos { x: 0, y: 3, z: 0 }), grass);
+    assert_eq!(s.get(BlockPos { x: 0, y: 2, z: 0 }), grass);
+    assert_eq!(s.get(BlockPos { x: 0, y: 1, z: 0 }), dirt);
+    assert_eq!(s.get(BlockPos { x: 2, y: 3, z: 0 }), sand);
+    assert_eq!(s.get(BlockPos { x: 2, y: 2, z: 0 }), stone);
   }
 }
 
