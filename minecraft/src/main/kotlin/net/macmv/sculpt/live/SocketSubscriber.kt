@@ -37,7 +37,9 @@ internal class SocketSubscriber(private val queue: DeltaQueue, private val socke
         logger.info("Received Sculpt SCLW welcome")
         while (running.get()) {
           val delta = Protocol.decodeDelta(readFrame(input))
-          logger.info("Received Sculpt section ({}, {}, {}) for revision {}", delta.key.x, delta.key.y, delta.key.z, delta.revision)
+          // Section streams can be very busy; per-update logging belongs at
+          // debug level so disk/console I/O does not throttle ingestion.
+          logger.debug("Received Sculpt section ({}, {}, {}) for revision {}", delta.key.x, delta.key.y, delta.key.z, delta.revision)
           queue.offer(delta)
         }
       }
