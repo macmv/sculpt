@@ -13,8 +13,8 @@ from mathutils import Vector
 
 MAGIC = b"SCLP"
 FULL_SNAPSHOT = 1
-# SCLP's header is fixed at 130 bytes; see ../protocol.md.
-HEADER = struct.Struct("<4sHQIII16f6ff3i")
+# SCLP's header is fixed at 132 bytes; see ../protocol.md.
+HEADER = struct.Struct("<4sHQIII16f6ff3iH")
 
 
 @dataclass(frozen=True)
@@ -43,6 +43,25 @@ def _world_bounds(evaluated) -> tuple[float, float, float, float, float, float]:
     )
 
 
+def _nearest_material_id(mesh, polygon, materials) -> int:
+    """Choose the configured color closest to a polygon's painted color."""
+    attribute = mesh.color_attributes.active_color
+    if attribute is None:
+        return 0
+    if attribute.domain == "POINT":
+        samples = (attribute.data[vertex].color for vertex in polygon.vertices)
+    else:
+        samples = (attribute.data[loop].color for loop in polygon.loop_indices)
+    samples = list(samples)
+    if not samples:
+        return 0
+    color = tuple(sum(sample[channel] for sample in samples) / len(samples) for channel in range(3))
+    return min(
+        range(len(materials)),
+        key=lambda index: sum((color[channel] - materials[index].color[channel]) ** 2 for channel in range(3)),
+    )
+
+
 def build_mesh_snapshot(_source, evaluated, mesh, revision: int, settings) -> MeshSnapshot:
     """Serialize an evaluated mesh as a complete SCLP snapshot.
 
@@ -67,6 +86,21 @@ def build_mesh_snapshot(_source, evaluated, mesh, revision: int, settings) -> Me
     units_per_block = settings.blender_units_per_block
     if not math.isfinite(units_per_block) or units_per_block <= 0:
         raise ValueError("Blender Units per Block must be positive")
+    materials = settings.materials
+    if not materials:
+        raise ValueError("add at least one Painted Block Color")
+    if len(materials) > 0xFFFF:
+        raise ValueError("too many Painted Block Colors")
+    material_table = bytearray()
+    for material in materials:
+        state = material.block_state.strip()
+        encoded = state.encode("utf-8")
+        if not state:
+            raise ValueError("Minecraft Block cannot be empty")
+        if len(encoded) > 0xFFFF:
+            raise ValueError("Minecraft Block name is too long")
+        material_table.extend(struct.pack("<H", len(encoded)))
+        material_table.extend(encoded)
 
     positions = array("f")
     for vertex in mesh.vertices:
@@ -76,7 +110,7 @@ def build_mesh_snapshot(_source, evaluated, mesh, revision: int, settings) -> Me
     material_ids = array("I")
     for triangle in mesh.loop_triangles:
         indices.extend(triangle.vertices)
-        material_ids.append(mesh.polygons[triangle.polygon_index].material_index)
+        material_ids.append(_nearest_material_id(mesh, mesh.polygons[triangle.polygon_index], materials))
 
     transform = tuple(value for row in evaluated.matrix_world for value in row)
     dirty_aabb = _world_bounds(evaluated)
@@ -94,6 +128,13 @@ def build_mesh_snapshot(_source, evaluated, mesh, revision: int, settings) -> Me
         *dirty_aabb,
         units_per_block,
         *settings.minecraft_origin,
+        len(materials),
     )
-    payload = header + _as_little_endian(positions) + _as_little_endian(indices) + _as_little_endian(material_ids)
+    payload = (
+        header
+        + material_table
+        + _as_little_endian(positions)
+        + _as_little_endian(indices)
+        + _as_little_endian(material_ids)
+    )
     return MeshSnapshot(payload, vertex_count, triangle_count)

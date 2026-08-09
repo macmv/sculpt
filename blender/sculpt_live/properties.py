@@ -3,6 +3,23 @@
 import bpy
 
 
+class CLIVE_PG_material(bpy.types.PropertyGroup):
+    color: bpy.props.FloatVectorProperty(
+        name="Paint Color",
+        description="Sculpt Paint color that selects this Minecraft block",
+        subtype="COLOR",
+        size=4,
+        min=0.0,
+        max=1.0,
+        default=(0.5, 0.5, 0.5, 1.0),
+    )
+    block_state: bpy.props.StringProperty(
+        name="Minecraft Block",
+        description="Canonical Minecraft block state, for example minecraft:stone",
+        default="minecraft:stone",
+    )
+
+
 class CLIVE_PG_settings(bpy.types.PropertyGroup):
     source_object: bpy.props.PointerProperty(
         name="Sculpt Object",
@@ -27,6 +44,8 @@ class CLIVE_PG_settings(bpy.types.PropertyGroup):
         size=3,
         default=(0, 0, 0),
     )
+    materials: bpy.props.CollectionProperty(type=CLIVE_PG_material)
+    active_material: bpy.props.IntProperty(default=0, min=0)
     revision: bpy.props.IntProperty(
         name="Revision",
         description="Last revision reserved for a published mesh snapshot",

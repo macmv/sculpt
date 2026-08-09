@@ -10,6 +10,33 @@ from .protocol import build_mesh_snapshot
 from .transport import send_snapshot
 
 
+class CLIVE_OT_add_material(bpy.types.Operator):
+    """Add a painted-color to Minecraft-block mapping"""
+
+    bl_idname = "sculpt_live.add_material"
+    bl_label = "Add Block Color"
+
+    def execute(self, context):
+        settings = context.scene.sculpt_live
+        settings.materials.add()
+        settings.active_material = len(settings.materials) - 1
+        return {"FINISHED"}
+
+
+class CLIVE_OT_remove_material(bpy.types.Operator):
+    """Remove the selected painted-color mapping"""
+
+    bl_idname = "sculpt_live.remove_material"
+    bl_label = "Remove Block Color"
+
+    def execute(self, context):
+        settings = context.scene.sculpt_live
+        if settings.materials:
+            settings.materials.remove(min(settings.active_material, len(settings.materials) - 1))
+            settings.active_material = max(0, min(settings.active_material, len(settings.materials) - 1))
+        return {"FINISHED"}
+
+
 class CLIVE_OT_publish_snapshot(bpy.types.Operator):
     """Send a full evaluated-mesh snapshot to the voxel service"""
 

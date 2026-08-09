@@ -1,7 +1,7 @@
 use std::{error::Error, fmt, io::Read};
 
 const MAGIC: [u8; 4] = *b"SCLP";
-const HEADER_SIZE: usize = 130;
+const HEADER_SIZE: usize = 132;
 const FULL_SNAPSHOT_FLAG: u32 = 1;
 const MAX_FRAME_SIZE: usize = 4 * 1024 * 1024;
 
@@ -14,6 +14,8 @@ pub struct MeshSnapshot {
   pub units_per_block:  f32,
   /// Minecraft block coordinate corresponding to the Blender world origin.
   pub minecraft_origin: [i32; 3],
+  /// Block-state names indexed by each triangle's painted material ID.
+  pub materials:        Vec<String>,
   pub vertices:         Vec<[f32; 3]>,
   pub triangles:        Vec<Triangle>,
 }
@@ -84,6 +86,29 @@ pub fn parse_mesh_snapshot(body: &[u8]) -> Result<MeshSnapshot, MessageError> {
 
   let vertex_count = read_u32(body, 18) as usize;
   let triangle_count = read_u32(body, 22) as usize;
+  let material_count = read_u16(body, 130) as usize;
+  let mut offset = HEADER_SIZE;
+  let mut materials = Vec::with_capacity(material_count);
+  for _ in 0..material_count {
+    if offset + 2 > body.len() {
+      return Err(MessageError("truncated material table".into()));
+    }
+    let length = read_u16(body, offset) as usize;
+    offset += 2;
+    let name = body
+      .get(offset..offset + length)
+      .ok_or_else(|| MessageError("truncated material name".into()))?;
+    let name = std::str::from_utf8(name)
+      .map_err(|_| MessageError("material name contains invalid UTF-8".into()))?;
+    if name.is_empty() {
+      return Err(MessageError("material name is empty".into()));
+    }
+    materials.push(name.to_owned());
+    offset += length;
+  }
+  if materials.is_empty() {
+    return Err(MessageError("material table is empty".into()));
+  }
   let vertex_bytes = vertex_count
     .checked_mul(3 * size_of::<f32>())
     .ok_or_else(|| MessageError("vertex buffer length overflows".into()))?;
@@ -93,7 +118,7 @@ pub fn parse_mesh_snapshot(body: &[u8]) -> Result<MeshSnapshot, MessageError> {
   let material_bytes = triangle_count
     .checked_mul(size_of::<u32>())
     .ok_or_else(|| MessageError("material buffer length overflows".into()))?;
-  let expected_length = HEADER_SIZE
+  let expected_length = offset
     .checked_add(vertex_bytes)
     .and_then(|length| length.checked_add(index_bytes))
     .and_then(|length| length.checked_add(material_bytes))
@@ -125,7 +150,6 @@ pub fn parse_mesh_snapshot(body: &[u8]) -> Result<MeshSnapshot, MessageError> {
     return Err(MessageError("dirty AABB minimum exceeds its maximum".into()));
   }
 
-  let mut offset = HEADER_SIZE;
   let mut vertices = Vec::with_capacity(vertex_count);
   for _ in 0..vertex_count {
     let vertex = read_f32_array::<3>(body, offset);
@@ -149,9 +173,14 @@ pub fn parse_mesh_snapshot(body: &[u8]) -> Result<MeshSnapshot, MessageError> {
     .map(|indices| {
       let material_id = read_u32(body, offset);
       offset += size_of::<u32>();
-      Triangle { indices, material_id }
+      if material_id as usize >= materials.len() {
+        // This check lives here so malformed IDs cannot reach voxelization.
+        // It is intentionally after the table has been decoded.
+        return Err(MessageError("triangle references an out-of-range material".into()));
+      }
+      Ok(Triangle { indices, material_id })
     })
-    .collect();
+    .collect::<Result<Vec<_>, _>>()?;
 
   Ok(MeshSnapshot {
     revision,
@@ -159,6 +188,7 @@ pub fn parse_mesh_snapshot(body: &[u8]) -> Result<MeshSnapshot, MessageError> {
     dirty_aabb,
     units_per_block,
     minecraft_origin,
+    materials,
     vertices,
     triangles,
   })
@@ -227,15 +257,20 @@ mod tests {
     for (index, coordinate) in [100_i32, 64, -20].into_iter().enumerate() {
       message[118 + index * 4..122 + index * 4].copy_from_slice(&coordinate.to_le_bytes());
     }
+    message[130..132].copy_from_slice(&1_u16.to_le_bytes());
+    message.extend_from_slice(&15_u16.to_le_bytes());
+    message.extend_from_slice(b"minecraft:stone");
     for value in [0.0_f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
       message.extend_from_slice(&value.to_le_bytes());
     }
     for index in [0_u32, 1, 2] {
       message.extend_from_slice(&index.to_le_bytes());
     }
-    message.extend_from_slice(&4_u32.to_le_bytes());
+    message.extend_from_slice(&0_u32.to_le_bytes());
     message
   }
+
+  fn vertex_offset() -> usize { HEADER_SIZE + 2 + b"minecraft:stone".len() }
 
   #[test]
   fn parses_a_valid_mesh_snapshot() {
@@ -244,7 +279,8 @@ mod tests {
     assert_eq!(mesh.vertices.len(), 3);
     assert_eq!(mesh.triangles.len(), 1);
     assert_eq!(mesh.triangles[0].indices, [0, 1, 2]);
-    assert_eq!(mesh.triangles[0].material_id, 4);
+    assert_eq!(mesh.triangles[0].material_id, 0);
+    assert_eq!(mesh.materials, ["minecraft:stone"]);
     assert_eq!(mesh.units_per_block, 2.5);
     assert_eq!(mesh.minecraft_origin, [100, 64, -20]);
   }
@@ -267,7 +303,7 @@ mod tests {
     assert!(parse_mesh_snapshot(&bad_magic).unwrap_err().to_string().contains("magic"));
 
     let mut non_finite = valid_message();
-    non_finite[HEADER_SIZE..HEADER_SIZE + 4].copy_from_slice(&f32::NAN.to_le_bytes());
+    non_finite[vertex_offset()..vertex_offset() + 4].copy_from_slice(&f32::NAN.to_le_bytes());
     assert!(parse_mesh_snapshot(&non_finite).unwrap_err().to_string().contains("non-finite"));
   }
 
@@ -299,7 +335,7 @@ mod tests {
   #[test]
   fn rejects_an_out_of_range_triangle_index() {
     let mut message = valid_message();
-    let index_offset = HEADER_SIZE + 3 * 3 * size_of::<f32>();
+    let index_offset = vertex_offset() + 3 * 3 * size_of::<f32>();
     message[index_offset..index_offset + 4].copy_from_slice(&3_u32.to_le_bytes());
     assert!(parse_mesh_snapshot(&message).is_err());
   }

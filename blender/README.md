@@ -15,6 +15,16 @@ Choose a mesh source object and use **Publish Snapshot**. The current operator
 builds a compact binary full-mesh snapshot and sends it to the configured Unix
 domain socket. A revision advances only after the complete frame is written.
 See `../protocol.md` for the wire format.
+
+## Painted block materials
+
+In the add-on panel, use **Painted Block Colors** to associate a color with a
+canonical Minecraft block state such as `minecraft:stone` or `minecraft:dirt`.
+The Sculpt workspace's **Paint** brush paints the mesh's active color attribute
+(vertex/corner color data); it does not assign Blender material slots and is not
+texture paint. On publish, each polygon is matched to the nearest configured
+color and the voxel service uses the associated block state for the solid volume
+behind that painted surface. Add at least one mapping before publishing.
 The intended transport is a Unix domain socket at `/tmp/sculpt-live.sock`, with
 length-prefixed binary messages. Do not send mesh geometry as JSON.
 

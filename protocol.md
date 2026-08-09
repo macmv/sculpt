@@ -36,7 +36,7 @@ is compatible. Its body is:
 | Offset | Type | Field |
 | --- | --- | --- |
 | 0 | `[u8; 4]` | ASCII `SCLP` |
-| 4 | `u16` | Header size, currently `130` |
+| 4 | `u16` | Header size, currently `132` |
 | 6 | `u64` | Global monotonically increasing revision |
 | 14 | `u32` | Flags (`1` = complete snapshot; other bits zero) |
 | 18 | `u32` | Vertex count |
@@ -45,12 +45,15 @@ is compatible. Its body is:
 | 90 | `[f32; 6]` | World dirty AABB: min xyz, then max xyz |
 | 114 | `f32` | Blender world units per Minecraft block |
 | 118 | `[i32; 3]` | Minecraft block coordinate at Blender world origin |
-| 130 | `[f32; vertex_count * 3]` | Local-space vertex positions, xyz |
+| 130 | `u16` | Painted material count |
+| 132 | repeated | `u16` UTF-8 byte length + canonical Minecraft block-state string |
+| … | `[f32; vertex_count * 3]` | Local-space vertex positions, xyz |
 | … | `[u32; triangle_count * 3]` | Triangle vertex indices |
-| … | `[u32; triangle_count]` | Blender material slot per triangle |
+| … | `[u32; triangle_count]` | Painted-material index per triangle |
 
-The core validates finite values, dimensions, index bounds, and revision before
-accepting the snapshot. A Blender world point `(x, y, z)` maps
+The core validates finite values, dimensions, material names and indices, index bounds, and revision before
+accepting the snapshot. Blender selects the material index by matching each
+polygon's active color attribute to its configured painted block color. A Blender world point `(x, y, z)` maps
 to `(origin_x + x / units, origin_y + z / units, origin_z - y / units)` in
 Minecraft block coordinates.
 

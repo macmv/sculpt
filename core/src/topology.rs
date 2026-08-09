@@ -21,7 +21,7 @@ pub enum TopologyError {
   NonManifold,
   InconsistentOrientation,
   DegenerateTriangle,
-  MissingStone,
+  UnknownMaterial(String),
   CoordinateOverflow,
 }
 
@@ -33,7 +33,9 @@ impl fmt::Display for TopologyError {
       Self::NonManifold => "mesh is not a watertight manifold",
       Self::InconsistentOrientation => "mesh has inconsistently oriented faces",
       Self::DegenerateTriangle => "mesh contains a degenerate triangle",
-      Self::MissingStone => "Minecraft registry does not contain minecraft:stone",
+      Self::UnknownMaterial(state) => {
+        return write!(f, "Minecraft registry does not contain material {state:?}");
+      }
       Self::CoordinateOverflow => "mesh scan range exceeds Minecraft coordinate limits",
     })
   }
@@ -52,7 +54,11 @@ pub fn reconcile(
     Some(region) => validate_region(region)?,
     None => mesh.default_region()?,
   };
-  let stone = state.lookup("minecraft:stone").map_err(|_| TopologyError::MissingStone)?;
+  let materials: Vec<_> = snapshot
+    .materials
+    .iter()
+    .map(|name| state.lookup(name).map_err(|_| TopologyError::UnknownMaterial(name.clone())))
+    .collect::<Result<_, _>>()?;
   let air = state.air();
   let bvh = Bvh::new(&mesh.triangles);
 
@@ -60,16 +66,22 @@ pub fn reconcile(
     for z in region.min.z..=region.max.z {
       let mut hits = Vec::new();
       bvh.line_hits(&mesh.triangles, y as f64 + 0.5, z as f64 + 0.5, &mut hits);
-      hits.sort_by(f64::total_cmp);
+      hits.sort_by(|a, b| a.0.total_cmp(&b.0));
       // A quad split into two triangles reports the same crossing twice.
-      hits.dedup_by(|a, b| (*a - *b).abs() < 1e-8);
+      hits.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-8);
       let mut hit = 0;
+      let mut layers = Vec::new();
       for x in region.min.x..=region.max.x {
         let center = x as f64 + 0.5;
-        while hit < hits.len() && hits[hit] < center {
+        while hit < hits.len() && hits[hit].0 < center {
+          if hit % 2 == 0 {
+            layers.push(materials[mesh.triangles[hits[hit].1].material_id as usize]);
+          } else {
+            layers.pop();
+          }
           hit += 1;
         }
-        state.set(BlockPos { x, y, z }, if hit % 2 == 1 { stone } else { air });
+        state.set(BlockPos { x, y, z }, layers.last().copied().unwrap_or(air));
       }
     }
   }
@@ -112,7 +124,10 @@ impl Mesh {
         let entry = edges.entry(key).or_insert((0, 0));
         if from < to { entry.0 += 1 } else { entry.1 += 1 }
       }
-      let tri = Tri { p: [vertices[a as usize], vertices[b as usize], vertices[c as usize]] };
+      let tri = Tri {
+        p:           [vertices[a as usize], vertices[b as usize], vertices[c as usize]],
+        material_id: face.material_id,
+      };
       if tri.area2() < 1e-18 {
         return Err(TopologyError::DegenerateTriangle);
       }
@@ -199,6 +214,7 @@ mod tests {
       dirty_aabb: [0.; 6],
       units_per_block: 1.,
       minecraft_origin: [0; 3],
+      materials: vec!["minecraft:stone".into()],
       vertices,
       triangles: faces.into_iter().map(|indices| Triangle { indices, material_id: 0 }).collect(),
     }
@@ -265,7 +281,8 @@ fn map_point(s: &MeshSnapshot, p: [f32; 3]) -> [f64; 3] {
 
 #[derive(Clone, Copy)]
 struct Tri {
-  p: [[f64; 3]; 3],
+  p:           [[f64; 3]; 3],
+  material_id: u32,
 }
 impl Tri {
   fn area2(&self) -> f64 {
@@ -358,10 +375,10 @@ impl Bvh {
     }
     me
   }
-  fn line_hits(&self, tris: &[Tri], y: f64, z: f64, out: &mut Vec<f64>) {
+  fn line_hits(&self, tris: &[Tri], y: f64, z: f64, out: &mut Vec<(f64, usize)>) {
     self.visit(0, tris, y, z, out)
   }
-  fn visit(&self, n: usize, tris: &[Tri], y: f64, z: f64, out: &mut Vec<f64>) {
+  fn visit(&self, n: usize, tris: &[Tri], y: f64, z: f64, out: &mut Vec<(f64, usize)>) {
     let node = &self.nodes[n];
     if y < node.lo[1] || y > node.hi[1] || z < node.lo[2] || z > node.hi[2] {
       return;
@@ -372,7 +389,7 @@ impl Bvh {
     } else {
       for &i in &self.indices[node.range.clone()] {
         if let Some(x) = tris[i].line_hit(y, z) {
-          out.push(x)
+          out.push((x, i))
         }
       }
     }
