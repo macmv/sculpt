@@ -16,7 +16,9 @@ use std::{
 
 const SOCKET_PATH: &str = "/tmp/sculpt-live.sock";
 const MAX_FRAME_SIZE: usize = 4 * 1024 * 1024;
-const SUBSCRIBER_QUEUE_CAPACITY: usize = 128;
+/// Bounds per-subscriber memory without truncating ordinary full-sculpt
+/// updates, which commonly touch far more than 128 sections.
+const SUBSCRIBER_QUEUE_CAPACITY: usize = 16_384;
 
 enum CoreEvent {
   Snapshot(blender::MeshSnapshot),
@@ -174,7 +176,13 @@ fn process_events(receiver: Receiver<CoreEvent>) {
             match entry.outgoing.try_send(delta) {
               Ok(()) => {}
               Err(TrySendError::Full(_)) => {
-                log::warn!("Minecraft subscriber queue is full; dropping queued delta");
+                log::warn!(
+                  "Minecraft subscriber queue reached its {SUBSCRIBER_QUEUE_CAPACITY}-section limit; dropping section ({}, {}, {}) for revision {}",
+                  position.x,
+                  position.y,
+                  position.z,
+                  snapshot.revision
+                );
               }
               Err(TrySendError::Disconnected(_)) => return false,
             }
