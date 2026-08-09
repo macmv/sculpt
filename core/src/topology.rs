@@ -130,11 +130,29 @@ pub fn reconcile(
       }
     }
   }
+  // Occupancy is classified with an X-axis ray, but material belongs to the
+  // visible top surface of each Minecraft X/Z column.
+  let mut surface_materials = vec![None; width * depth];
+  for z in 0..depth {
+    for x in 0..width {
+      let mut hits = Vec::new();
+      bvh.line_hits_along_y(
+        &mesh.triangles,
+        region.min.x as f64 + x as f64 + 0.5,
+        region.min.z as f64 + z as f64 + 0.5,
+        &mut hits,
+      );
+      surface_materials[z * width + x] = hits
+        .into_iter()
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, triangle)| mesh.triangles[triangle].material_id as usize);
+    }
+  }
   // Layering is vertical in Minecraft coordinates, not along a face normal.
   // That keeps cave walls and side faces from receiving surface blocks.
   for z in 0..depth {
     for x in 0..width {
-      let mut top_material = None;
+      let top_material = surface_materials[z * width + x];
       let mut solid_depth = 0_u16;
       for y in (0..height).rev() {
         let index = (y * depth + z) * width + x;
@@ -145,12 +163,7 @@ pub fn reconcile(
         };
         match selected[index] {
           Some(material) => {
-            let material = if let Some(material) = top_material {
-              material
-            } else {
-              top_material = Some(material);
-              material
-            };
+            let material = top_material.unwrap_or(material);
             let definition = &materials[material];
             let block = if solid_depth < definition.base_depth {
               definition.base
@@ -167,7 +180,17 @@ pub fn reconcile(
       }
     }
   }
-  apply_surface_features(&materials, &selected, region, width, height, depth, state, air);
+  apply_surface_features(
+    &materials,
+    &selected,
+    &surface_materials,
+    region,
+    width,
+    height,
+    depth,
+    state,
+    air,
+  );
   Ok(())
 }
 
@@ -197,6 +220,7 @@ enum ResolvedFeature {
 fn apply_surface_features(
   materials: &[ResolvedMaterial],
   selected: &[Option<usize>],
+  surface_materials: &[Option<usize>],
   region: BlockRegion,
   width: usize,
   height: usize,
@@ -206,10 +230,16 @@ fn apply_surface_features(
 ) {
   for z in 0..depth {
     for x in 0..width {
-      let material = (0..height).rev().find_map(|y| selected[(y * depth + z) * width + x]);
-      let Some(material) = material else { continue };
-      let top_y =
-        (0..height).rev().find(|&y| selected[(y * depth + z) * width + x].is_some()).unwrap();
+      let Some(top_y) =
+        (0..height).rev().find(|&y| selected[(y * depth + z) * width + x].is_some())
+      else {
+        continue;
+      };
+      let Some(material) =
+        surface_materials[z * width + x].or(selected[(top_y * depth + z) * width + x])
+      else {
+        continue;
+      };
       let x = region.min.x + x as i32;
       let y = region.min.y + top_y as i32 + 1;
       let z = region.min.z + z as i32;
@@ -500,9 +530,12 @@ mod tests {
         }],
       },
     ];
-    // The x=0 side is the entering surface for the +X classification ray.
-    mesh.triangles[8].material_id = 0;
-    mesh.triangles[9].material_id = 0;
+    // The +X entry side is deliberately a different material: it must not
+    // override the visible Minecraft-Y top face.
+    mesh.triangles[8].material_id = 1;
+    mesh.triangles[9].material_id = 1;
+    mesh.triangles[6].material_id = 0;
+    mesh.triangles[7].material_id = 0;
     let mut adjacent = mesh.clone();
     for vertex in &mut adjacent.vertices {
       vertex[0] += 2.;
@@ -602,6 +635,30 @@ impl Tri {
     };
     Some(f * dot(e2, q))
   }
+  fn vertical_line_hit(&self, x: f64, z: f64) -> Option<f64> {
+    // Moller-Trumbore, ray +Y from negative infinity.
+    let e1 = sub(self.p[1], self.p[0]);
+    let e2 = sub(self.p[2], self.p[0]);
+    let d = [0., 1., 0.];
+    let h = cross(d, e2);
+    let a = dot(e1, h);
+    if a.abs() < 1e-12 {
+      return None;
+    };
+    let f = 1. / a;
+    let q0 = [x, 0., z];
+    let s = sub(q0, self.p[0]);
+    let u = f * dot(s, h);
+    if !(0. ..=1.).contains(&u) {
+      return None;
+    };
+    let q = cross(s, e1);
+    let v = f * dot(d, q);
+    if v < 0. || u + v > 1. {
+      return None;
+    }
+    Some(f * dot(e2, q))
+  }
 }
 fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] { [a[0] - b[0], a[1] - b[1], a[2] - b[2]] }
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 { a[0] * b[0] + a[1] * b[1] + a[2] * b[2] }
@@ -654,6 +711,9 @@ impl Bvh {
   fn line_hits(&self, tris: &[Tri], y: f64, z: f64, out: &mut Vec<(f64, usize)>) {
     self.visit(0, tris, y, z, out)
   }
+  fn line_hits_along_y(&self, tris: &[Tri], x: f64, z: f64, out: &mut Vec<(f64, usize)>) {
+    self.visit_along_y(0, tris, x, z, out)
+  }
   fn visit(&self, n: usize, tris: &[Tri], y: f64, z: f64, out: &mut Vec<(f64, usize)>) {
     let node = &self.nodes[n];
     if y < node.lo[1] || y > node.hi[1] || z < node.lo[2] || z > node.hi[2] {
@@ -666,6 +726,22 @@ impl Bvh {
       for &i in &self.indices[node.range.clone()] {
         if let Some(x) = tris[i].line_hit(y, z) {
           out.push((x, i))
+        }
+      }
+    }
+  }
+  fn visit_along_y(&self, n: usize, tris: &[Tri], x: f64, z: f64, out: &mut Vec<(f64, usize)>) {
+    let node = &self.nodes[n];
+    if x < node.lo[0] || x > node.hi[0] || z < node.lo[2] || z > node.hi[2] {
+      return;
+    }
+    if let Some((l, r)) = node.children {
+      self.visit_along_y(l, tris, x, z, out);
+      self.visit_along_y(r, tris, x, z, out)
+    } else {
+      for &i in &self.indices[node.range.clone()] {
+        if let Some(y) = tris[i].vertical_line_hit(x, z) {
+          out.push((y, i))
         }
       }
     }
