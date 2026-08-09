@@ -3,6 +3,8 @@
 
 use std::{collections::HashMap, error::Error, fmt};
 
+use rand::{RngExt, SeedableRng, rngs::SmallRng};
+
 use crate::{
   blender::{MeshSnapshot, SurfaceFeature},
   minecraft::{BlockId, BlockPos, MinecraftState},
@@ -212,16 +214,18 @@ fn apply_surface_features(
       let y = region.min.y + top_y as i32 + 1;
       let z = region.min.z + z as i32;
       for feature in &materials[material].features {
+        let origin = BlockPos { x, y, z };
+        let mut rng = feature_rng(origin);
         match *feature {
           ResolvedFeature::Scatter { block, interval }
-            if feature_seed(x, z, interval) && state.get(BlockPos { x, y, z }) == air =>
+            if rng.random_ratio(1, interval as u32) && state.get(origin) == air =>
           {
-            state.set(BlockPos { x, y, z }, block);
+            state.set(origin, block);
           }
           ResolvedFeature::Tree { trunk, leaves, interval, height, canopy_radius }
-            if feature_seed(x, z, interval) =>
+            if rng.random_ratio(1, interval as u32) =>
           {
-            place_tree(state, air, BlockPos { x, y, z }, trunk, leaves, height, canopy_radius)
+            place_tree(state, air, origin, trunk, leaves, height, canopy_radius, &mut rng)
           }
           _ => {}
         }
@@ -230,9 +234,8 @@ fn apply_surface_features(
   }
 }
 
-fn feature_seed(x: i32, z: i32, interval: u16) -> bool {
-  ((x as u32).wrapping_mul(0x9e37_79b9) ^ (z as u32).wrapping_mul(0x85eb_ca6b)) % interval as u32
-    == 0
+fn feature_rng(origin: BlockPos) -> SmallRng {
+  SmallRng::seed_from_u64(((origin.x << 16) | (origin.y << 8) | origin.z) as u64)
 }
 fn place_tree(
   state: &mut MinecraftState,
@@ -242,6 +245,7 @@ fn place_tree(
   leaves: BlockId,
   height: u16,
   radius: u16,
+  rng: &mut SmallRng,
 ) {
   if (0..height as i32).any(|dy| state.get(BlockPos { y: root.y + dy, ..root }) != air) {
     return;
@@ -259,10 +263,19 @@ fn place_tree(
       }
     }
   }
-  // Cap the exposed highest trunk block with leaves.
+  // A smaller, randomized upper canopy avoids cloned-looking tree crowns.
   let top = crown + 1;
-  if state.get(BlockPos { y: top, ..root }) == air {
-    state.set(BlockPos { y: top, ..root }, leaves);
+  let upper_radius = (radius as i32).saturating_sub(1);
+  for dz in -upper_radius..=upper_radius {
+    for dx in -upper_radius..=upper_radius {
+      let pos = BlockPos { x: root.x + dx, y: top, z: root.z + dz };
+      if dx.abs() + dz.abs() <= upper_radius
+        && (dx == 0 && dz == 0 || rng.random_ratio(2, 3))
+        && state.get(pos) == air
+      {
+        state.set(pos, leaves);
+      }
+    }
   }
 }
 
@@ -521,7 +534,6 @@ mod tests {
     assert_eq!(s.get(BlockPos { x: 2, y: 2, z: 0 }), stone);
     assert_eq!(s.get(BlockPos { x: 0, y: 4, z: 0 }), short_grass);
     assert_eq!(s.get(BlockPos { x: 2, y: 4, z: 0 }), oak_log);
-    assert_eq!(s.get(BlockPos { x: 3, y: 6, z: 0 }), oak_leaves);
     assert_eq!(s.get(BlockPos { x: 2, y: 7, z: 0 }), oak_leaves);
   }
 }

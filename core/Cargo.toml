@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 fern = "0.7"
 log = "0.4"
+rand = { version = "0.10.2", default-features = false }
