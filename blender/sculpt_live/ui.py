@@ -8,8 +8,11 @@ class CLIVE_UL_materials(bpy.types.UIList):
 
     def draw_item(self, _context, layout, _data, item, _icon, _active_data, _active_property, _index):
         row = layout.row(align=True)
-        row.prop(item, "color", text="")
-        row.prop(item, "block_state", text="")
+        swatch = row.row(align=True)
+        swatch.ui_units_x = 1.5
+        swatch.prop(item, "color", text="")
+        use_brush = row.operator("sculpt_live.use_material_brush", text="", icon="BRUSH_DATA")
+        use_brush.index = _index
 
 
 class CLIVE_PT_panel(bpy.types.Panel):
@@ -40,9 +43,14 @@ class CLIVE_PT_panel(bpy.types.Panel):
         buttons = row.column(align=True)
         buttons.operator("sculpt_live.add_material", text="", icon="ADD")
         buttons.operator("sculpt_live.remove_material", text="", icon="REMOVE")
+        if len(settings.materials) > 1:
+            buttons.separator()
+            move_up = buttons.operator("sculpt_live.move_material", text="", icon="TRIA_UP")
+            move_up.direction = "UP"
+            move_down = buttons.operator("sculpt_live.move_material", text="", icon="TRIA_DOWN")
+            move_down.direction = "DOWN"
         if settings.materials:
             material = settings.materials[min(settings.active_material, len(settings.materials) - 1)]
-            palette.prop(material, "color")
             palette.prop(material, "block_state")
         layout.separator()
         layout.operator("sculpt_live.publish_snapshot", icon="EXPORT")

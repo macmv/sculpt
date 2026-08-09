@@ -10,6 +10,57 @@ from .protocol import build_mesh_snapshot
 from .transport import send_snapshot
 
 
+class CLIVE_OT_use_material_brush(bpy.types.Operator):
+    """Set Sculpt Paint's brush color from this palette entry"""
+
+    bl_idname = "sculpt_live.use_material_brush"
+    bl_label = "Use Paint Color"
+
+    index: bpy.props.IntProperty(min=0)
+
+    def execute(self, context):
+        materials = context.scene.sculpt_live.materials
+        if self.index >= len(materials):
+            return {"CANCELLED"}
+        color = materials[self.index].color[:3]
+        brush = context.tool_settings.sculpt.brush
+        if brush is None:
+            self.report({"ERROR"}, "Choose a Sculpt Paint brush first")
+            return {"CANCELLED"}
+        brush.color = color
+        sculpt_settings = context.tool_settings.sculpt
+        sculpt_settings.unified_paint_settings.color = color
+        sculpt_settings.unified_paint_settings.use_unified_color = True
+        # Sculpt Paint uses the same color controls as Vertex Paint.  Set its
+        # brush too when Blender exposes one, so either paint tool stays in
+        # sync with the palette selection.
+        vertex_brush = context.tool_settings.vertex_paint.brush
+        if vertex_brush is not None:
+            vertex_brush.color = color
+            vertex_settings = context.tool_settings.vertex_paint
+            vertex_settings.unified_paint_settings.color = color
+            vertex_settings.unified_paint_settings.use_unified_color = True
+        return {"FINISHED"}
+
+
+class CLIVE_OT_move_material(bpy.types.Operator):
+    """Move the selected palette entry"""
+
+    bl_idname = "sculpt_live.move_material"
+    bl_label = "Move Block Color"
+
+    direction: bpy.props.EnumProperty(items=(("UP", "Up", ""), ("DOWN", "Down", "")))
+
+    def execute(self, context):
+        settings = context.scene.sculpt_live
+        index = settings.active_material
+        target = index - 1 if self.direction == "UP" else index + 1
+        if 0 <= target < len(settings.materials):
+            settings.materials.move(index, target)
+            settings.active_material = target
+        return {"FINISHED"}
+
+
 class CLIVE_OT_add_material(bpy.types.Operator):
     """Add a painted-color to Minecraft-block mapping"""
 
