@@ -28,6 +28,12 @@ texture paint. On publish, each polygon is matched to the nearest configured
 color and the voxel service uses the selected material for that solid column:
 the topmost `base_depth` solid blocks use its base block and deeper blocks use
 its underground block. Add at least one material before publishing.
+
+Each material can also contain **Surface Features**. A `Scatter` feature places
+its configured block on deterministic qualifying surface positions. A `Tree`
+feature configures trunk/leaves blocks, trunk height, and canopy radius. The
+placement interval controls density (for example, `8` is approximately one
+candidate in eight); both feature definitions travel with every snapshot.
 The intended transport is a Unix domain socket at `/tmp/sculpt-live.sock`, with
 length-prefixed binary messages. Do not send mesh geometry as JSON.
 

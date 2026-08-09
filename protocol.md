@@ -46,7 +46,7 @@ updated alongside the local Blender encoder and Rust decoder. Its body is:
 | 114 | `f32` | Blender world units per Minecraft block |
 | 118 | `[i32; 3]` | Minecraft block coordinate at Blender world origin |
 | 130 | `u16` | Painted material count |
-| 132 | repeated | `u16` base-state byte length + UTF-8 base state, `u16` underground-state byte length + UTF-8 underground state, `u16` positive base-layer depth |
+| 132 | repeated | `u16` base-state byte length + UTF-8 base state, `u16` underground-state byte length + UTF-8 underground state, `u16` positive base-layer depth, `u16` feature count, then feature records |
 | … | `[f32; vertex_count * 3]` | Local-space vertex positions, xyz |
 | … | `[u32; triangle_count * 3]` | Triangle vertex indices |
 | … | `[u32; triangle_count]` | Painted-material index per triangle |
@@ -56,6 +56,13 @@ accepting the snapshot. Blender selects the material index by matching each
 polygon's active color attribute to its configured painted material color. A Blender world point `(x, y, z)` maps
 to `(origin_x + x / units, origin_y + z / units, origin_z - y / units)` in
 Minecraft block coordinates.
+
+Surface-feature records begin with a `u8` kind and positive `u16` placement
+interval. Kind `1` (`scatter`) then carries one length-prefixed block state.
+Kind `2` (`tree`) carries length-prefixed trunk and leaves states followed by
+positive `u16` trunk height and `u16` canopy radius. Placement is deterministic
+from Minecraft X/Z coordinates; an interval of `N` selects roughly one in `N`
+qualifying top surfaces.
 
 ## Minecraft control packets
 

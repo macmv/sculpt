@@ -4,7 +4,7 @@
 use std::{collections::HashMap, error::Error, fmt};
 
 use crate::{
-  blender::MeshSnapshot,
+  blender::{MeshSnapshot, SurfaceFeature},
   minecraft::{BlockId, BlockPos, MinecraftState},
 };
 
@@ -68,6 +68,31 @@ pub fn reconcile(
           .lookup(&material.underground_block)
           .map_err(|_| TopologyError::UnknownMaterial(material.underground_block.clone()))?,
         base_depth:  material.base_depth,
+        features:    material
+          .features
+          .iter()
+          .map(|feature| match feature {
+            SurfaceFeature::Scatter { block, interval } => Ok(ResolvedFeature::Scatter {
+              block:    state
+                .lookup(block)
+                .map_err(|_| TopologyError::UnknownMaterial(block.clone()))?,
+              interval: *interval,
+            }),
+            SurfaceFeature::Tree { trunk, leaves, interval, height, canopy_radius } => {
+              Ok(ResolvedFeature::Tree {
+                trunk:         state
+                  .lookup(trunk)
+                  .map_err(|_| TopologyError::UnknownMaterial(trunk.clone()))?,
+                leaves:        state
+                  .lookup(leaves)
+                  .map_err(|_| TopologyError::UnknownMaterial(leaves.clone()))?,
+                interval:      *interval,
+                height:        *height,
+                canopy_radius: *canopy_radius,
+              })
+            }
+          })
+          .collect::<Result<_, _>>()?,
       })
     })
     .collect::<Result<_, _>>()?;
@@ -124,7 +149,7 @@ pub fn reconcile(
               top_material = Some(material);
               material
             };
-            let definition = materials[material];
+            let definition = &materials[material];
             let block = if solid_depth < definition.base_depth {
               definition.base
             } else {
@@ -140,14 +165,105 @@ pub fn reconcile(
       }
     }
   }
+  apply_surface_features(&materials, &selected, region, width, height, depth, state, air);
   Ok(())
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ResolvedMaterial {
   base:        BlockId,
   underground: BlockId,
   base_depth:  u16,
+  features:    Vec<ResolvedFeature>,
+}
+
+#[derive(Clone, Copy)]
+enum ResolvedFeature {
+  Scatter {
+    block:    BlockId,
+    interval: u16,
+  },
+  Tree {
+    trunk:         BlockId,
+    leaves:        BlockId,
+    interval:      u16,
+    height:        u16,
+    canopy_radius: u16,
+  },
+}
+
+fn apply_surface_features(
+  materials: &[ResolvedMaterial],
+  selected: &[Option<usize>],
+  region: BlockRegion,
+  width: usize,
+  height: usize,
+  depth: usize,
+  state: &mut MinecraftState,
+  air: BlockId,
+) {
+  for z in 0..depth {
+    for x in 0..width {
+      let material = (0..height).rev().find_map(|y| selected[(y * depth + z) * width + x]);
+      let Some(material) = material else { continue };
+      let top_y =
+        (0..height).rev().find(|&y| selected[(y * depth + z) * width + x].is_some()).unwrap();
+      let x = region.min.x + x as i32;
+      let y = region.min.y + top_y as i32 + 1;
+      let z = region.min.z + z as i32;
+      for feature in &materials[material].features {
+        match *feature {
+          ResolvedFeature::Scatter { block, interval }
+            if feature_seed(x, z, interval) && state.get(BlockPos { x, y, z }) == air =>
+          {
+            state.set(BlockPos { x, y, z }, block);
+          }
+          ResolvedFeature::Tree { trunk, leaves, interval, height, canopy_radius }
+            if feature_seed(x, z, interval) =>
+          {
+            place_tree(state, air, BlockPos { x, y, z }, trunk, leaves, height, canopy_radius)
+          }
+          _ => {}
+        }
+      }
+    }
+  }
+}
+
+fn feature_seed(x: i32, z: i32, interval: u16) -> bool {
+  ((x as u32).wrapping_mul(0x9e37_79b9) ^ (z as u32).wrapping_mul(0x85eb_ca6b)) % interval as u32
+    == 0
+}
+fn place_tree(
+  state: &mut MinecraftState,
+  air: BlockId,
+  root: BlockPos,
+  trunk: BlockId,
+  leaves: BlockId,
+  height: u16,
+  radius: u16,
+) {
+  if (0..height as i32).any(|dy| state.get(BlockPos { y: root.y + dy, ..root }) != air) {
+    return;
+  }
+  for dy in 0..height as i32 {
+    state.set(BlockPos { y: root.y + dy, ..root }, trunk);
+  }
+  let crown = root.y + height as i32 - 1;
+  for dz in -(radius as i32)..=radius as i32 {
+    for dx in -(radius as i32)..=radius as i32 {
+      if dx.abs() + dz.abs() <= radius as i32
+        && state.get(BlockPos { x: root.x + dx, y: crown, z: root.z + dz }) == air
+      {
+        state.set(BlockPos { x: root.x + dx, y: crown, z: root.z + dz }, leaves);
+      }
+    }
+  }
+  // Cap the exposed highest trunk block with leaves.
+  let top = crown + 1;
+  if state.get(BlockPos { y: top, ..root }) == air {
+    state.set(BlockPos { y: top, ..root }, leaves);
+  }
 }
 
 fn validate_region(region: BlockRegion) -> Result<BlockRegion, TopologyError> {
@@ -238,7 +354,7 @@ impl Mesh {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::blender::{Material, Triangle};
+  use crate::blender::{Material, SurfaceFeature, Triangle};
 
   fn state() -> MinecraftState {
     MinecraftState::new(vec![
@@ -247,6 +363,9 @@ mod tests {
       "minecraft:grass_block".into(),
       "minecraft:dirt".into(),
       "minecraft:sand".into(),
+      "minecraft:short_grass".into(),
+      "minecraft:oak_log".into(),
+      "minecraft:oak_leaves".into(),
     ])
     .unwrap()
   }
@@ -287,6 +406,7 @@ mod tests {
         base_block:        "minecraft:stone".into(),
         underground_block: "minecraft:stone".into(),
         base_depth:        1,
+        features:          vec![],
       }],
       vertices,
       triangles: faces.into_iter().map(|indices| Triangle { indices, material_id: 0 }).collect(),
@@ -349,11 +469,22 @@ mod tests {
         base_block:        "minecraft:grass_block".into(),
         underground_block: "minecraft:dirt".into(),
         base_depth:        2,
+        features:          vec![SurfaceFeature::Scatter {
+          block:    "minecraft:short_grass".into(),
+          interval: 1,
+        }],
       },
       Material {
         base_block:        "minecraft:sand".into(),
         underground_block: "minecraft:stone".into(),
         base_depth:        1,
+        features:          vec![SurfaceFeature::Tree {
+          trunk:         "minecraft:oak_log".into(),
+          leaves:        "minecraft:oak_leaves".into(),
+          interval:      1,
+          height:        3,
+          canopy_radius: 1,
+        }],
       },
     ];
     // The x=0 side is the entering surface for the +X classification ray.
@@ -380,11 +511,18 @@ mod tests {
     let dirt = s.lookup("minecraft:dirt").unwrap();
     let sand = s.lookup("minecraft:sand").unwrap();
     let stone = s.lookup("minecraft:stone").unwrap();
+    let short_grass = s.lookup("minecraft:short_grass").unwrap();
+    let oak_log = s.lookup("minecraft:oak_log").unwrap();
+    let oak_leaves = s.lookup("minecraft:oak_leaves").unwrap();
     assert_eq!(s.get(BlockPos { x: 0, y: 3, z: 0 }), grass);
     assert_eq!(s.get(BlockPos { x: 0, y: 2, z: 0 }), grass);
     assert_eq!(s.get(BlockPos { x: 0, y: 1, z: 0 }), dirt);
     assert_eq!(s.get(BlockPos { x: 2, y: 3, z: 0 }), sand);
     assert_eq!(s.get(BlockPos { x: 2, y: 2, z: 0 }), stone);
+    assert_eq!(s.get(BlockPos { x: 0, y: 4, z: 0 }), short_grass);
+    assert_eq!(s.get(BlockPos { x: 2, y: 4, z: 0 }), oak_log);
+    assert_eq!(s.get(BlockPos { x: 3, y: 6, z: 0 }), oak_leaves);
+    assert_eq!(s.get(BlockPos { x: 2, y: 7, z: 0 }), oak_leaves);
   }
 }
 

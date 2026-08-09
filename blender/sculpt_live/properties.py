@@ -3,6 +3,21 @@
 import bpy
 
 
+class CLIVE_PG_feature(bpy.types.PropertyGroup):
+    kind: bpy.props.EnumProperty(
+        name="Feature Type",
+        items=(("SCATTER", "Scatter", "Place a block on qualifying surfaces"),
+               ("TREE", "Tree", "Place a simple configured tree on qualifying surfaces")),
+        default="SCATTER",
+    )
+    interval: bpy.props.IntProperty(name="Placement Interval", default=8, min=1, max=65535)
+    scatter_block: bpy.props.StringProperty(name="Scatter Block", default="minecraft:short_grass")
+    trunk_block: bpy.props.StringProperty(name="Trunk Block", default="minecraft:oak_log")
+    leaves_block: bpy.props.StringProperty(name="Leaves Block", default="minecraft:oak_leaves")
+    tree_height: bpy.props.IntProperty(name="Tree Height", default=4, min=1, max=255)
+    canopy_radius: bpy.props.IntProperty(name="Canopy Radius", default=2, min=0, max=255)
+
+
 class CLIVE_PG_material(bpy.types.PropertyGroup):
     color: bpy.props.FloatVectorProperty(
         name="Paint Color",
@@ -29,6 +44,8 @@ class CLIVE_PG_material(bpy.types.PropertyGroup):
         default=1,
         min=1,
     )
+    features: bpy.props.CollectionProperty(type=CLIVE_PG_feature)
+    active_feature: bpy.props.IntProperty(default=0, min=0)
 
 
 class CLIVE_PG_settings(bpy.types.PropertyGroup):

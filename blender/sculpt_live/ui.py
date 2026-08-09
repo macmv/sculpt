@@ -15,6 +15,20 @@ class CLIVE_UL_materials(bpy.types.UIList):
         use_brush.index = _index
 
 
+class CLIVE_UL_features(bpy.types.UIList):
+    """Readable summaries for a material's surface-feature list."""
+
+    def draw_item(self, _context, layout, _data, item, _icon, _active_data, _active_property, _index):
+        if item.kind == "SCATTER":
+            summary = f"Scatter: {item.scatter_block} (every {item.interval})"
+        else:
+            summary = (
+                f"Tree: {item.trunk_block} + {item.leaves_block} "
+                f"({item.tree_height} high, radius {item.canopy_radius}, every {item.interval})"
+            )
+        layout.label(text=summary, icon="PARTICLES")
+
+
 class CLIVE_PT_panel(bpy.types.Panel):
     bl_label = "Sculpt Live"
     bl_idname = "CLIVE_PT_sculpt_live"
@@ -54,6 +68,24 @@ class CLIVE_PT_panel(bpy.types.Panel):
             palette.prop(material, "base_block")
             palette.prop(material, "underground_block")
             palette.prop(material, "base_depth")
+            features = palette.box()
+            features.label(text="Surface Features")
+            row = features.row()
+            row.template_list("CLIVE_UL_features", "sculpt_live_features", material, "features", material, "active_feature", rows=2)
+            buttons = row.column(align=True)
+            buttons.operator("sculpt_live.add_feature", text="", icon="ADD")
+            buttons.operator("sculpt_live.remove_feature", text="", icon="REMOVE")
+            if material.features:
+                feature = material.features[min(material.active_feature, len(material.features) - 1)]
+                features.prop(feature, "kind")
+                features.prop(feature, "interval")
+                if feature.kind == "SCATTER":
+                    features.prop(feature, "scatter_block")
+                else:
+                    features.prop(feature, "trunk_block")
+                    features.prop(feature, "leaves_block")
+                    features.prop(feature, "tree_height")
+                    features.prop(feature, "canopy_radius")
         layout.separator()
         layout.operator("sculpt_live.publish_snapshot", icon="EXPORT")
         layout.label(text=f"Last revision: {settings.revision}")

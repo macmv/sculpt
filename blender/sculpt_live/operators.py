@@ -74,6 +74,35 @@ class CLIVE_OT_add_material(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class CLIVE_OT_add_feature(bpy.types.Operator):
+    bl_idname = "sculpt_live.add_feature"
+    bl_label = "Add Surface Feature"
+
+    def execute(self, context):
+        settings = context.scene.sculpt_live
+        if not settings.materials:
+            return {"CANCELLED"}
+        material = settings.materials[min(settings.active_material, len(settings.materials) - 1)]
+        material.features.add()
+        material.active_feature = len(material.features) - 1
+        return {"FINISHED"}
+
+
+class CLIVE_OT_remove_feature(bpy.types.Operator):
+    bl_idname = "sculpt_live.remove_feature"
+    bl_label = "Remove Surface Feature"
+
+    def execute(self, context):
+        settings = context.scene.sculpt_live
+        if not settings.materials:
+            return {"CANCELLED"}
+        material = settings.materials[min(settings.active_material, len(settings.materials) - 1)]
+        if material.features:
+            material.features.remove(min(material.active_feature, len(material.features) - 1))
+            material.active_feature = max(0, min(material.active_feature, len(material.features) - 1))
+        return {"FINISHED"}
+
+
 class CLIVE_OT_remove_material(bpy.types.Operator):
     """Remove the selected painted-color mapping"""
 

@@ -151,10 +151,11 @@ Shape and block selection are separate concerns.
 - Core applies the selected material by Minecraft X/Z column: the topmost
   solid block and the next `base-layer depth - 1` solid blocks use the base
   block; deeper solid blocks use the underground block. Air remains air.
-- Surface features are deferred. A future `scatter` feature will place its
-  configured blocks around qualifying material surfaces, and a future `tree`
-  feature will place its configured trees around qualifying material surfaces.
-  The first implementation emits neither scatter nor tree blocks.
+- Surface features are generated after terrain layers. `scatter` places its
+  configured block above qualifying top surfaces at a deterministic placement
+  interval. `tree` places a configured trunk and a one-layer diamond canopy of
+  configured leaves above qualifying top surfaces at the same kind of interval.
+  Features never replace a non-air block.
 
 ## Minecraft application
 

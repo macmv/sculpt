@@ -109,6 +109,42 @@ def build_mesh_snapshot(_source, evaluated, mesh, revision: int, settings) -> Me
         material_table.extend(struct.pack("<H", len(underground_encoded)))
         material_table.extend(underground_encoded)
         material_table.extend(struct.pack("<H", depth))
+        if len(material.features) > 0xFFFF:
+            raise ValueError("too many surface features")
+        material_table.extend(struct.pack("<H", len(material.features)))
+        for feature in material.features:
+            interval = feature.interval
+            if not isinstance(interval, int) or not 0 < interval <= 0xFFFF:
+                raise ValueError("Placement Interval must be between 1 and 65535")
+            if feature.kind == "SCATTER":
+                block = feature.scatter_block.strip()
+                encoded = block.encode("utf-8")
+                if not block:
+                    raise ValueError("Scatter Block cannot be empty")
+                if len(encoded) > 0xFFFF:
+                    raise ValueError("Scatter Block name is too long")
+                material_table.extend(struct.pack("<BH", 1, interval))
+                material_table.extend(struct.pack("<H", len(encoded)))
+                material_table.extend(encoded)
+            else:
+                trunk = feature.trunk_block.strip()
+                leaves = feature.leaves_block.strip()
+                trunk_encoded = trunk.encode("utf-8")
+                leaves_encoded = leaves.encode("utf-8")
+                if not trunk or not leaves:
+                    raise ValueError("Tree trunk and leaves blocks cannot be empty")
+                if len(trunk_encoded) > 0xFFFF or len(leaves_encoded) > 0xFFFF:
+                    raise ValueError("Tree block name is too long")
+                height = feature.tree_height
+                radius = feature.canopy_radius
+                if not isinstance(height, int) or not 0 < height <= 0xFFFF or not isinstance(radius, int) or radius > 0xFFFF:
+                    raise ValueError("Tree dimensions are invalid")
+                material_table.extend(struct.pack("<BH", 2, interval))
+                material_table.extend(struct.pack("<H", len(trunk_encoded)))
+                material_table.extend(trunk_encoded)
+                material_table.extend(struct.pack("<H", len(leaves_encoded)))
+                material_table.extend(leaves_encoded)
+                material_table.extend(struct.pack("<HH", height, radius))
 
     positions = array("f")
     for vertex in mesh.vertices:

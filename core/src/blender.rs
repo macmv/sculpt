@@ -25,6 +25,22 @@ pub struct Material {
   pub base_block:        String,
   pub underground_block: String,
   pub base_depth:        u16,
+  pub features:          Vec<SurfaceFeature>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SurfaceFeature {
+  Scatter {
+    block:    String,
+    interval: u16,
+  },
+  Tree {
+    trunk:         String,
+    leaves:        String,
+    interval:      u16,
+    height:        u16,
+    canopy_radius: u16,
+  },
 }
 
 #[derive(Debug, Clone)]
@@ -133,10 +149,63 @@ pub fn parse_mesh_snapshot(body: &[u8]) -> Result<MeshSnapshot, MessageError> {
       return Err(MessageError("material base depth must be positive".into()));
     }
     offset += 2;
+    if offset + 2 > body.len() {
+      return Err(MessageError("truncated surface feature count".into()));
+    }
+    let feature_count = read_u16(body, offset) as usize;
+    offset += 2;
+    let mut features = Vec::with_capacity(feature_count);
+    for _ in 0..feature_count {
+      if offset + 3 > body.len() {
+        return Err(MessageError("truncated surface feature".into()));
+      }
+      let kind = body[offset];
+      let interval = read_u16(body, offset + 1);
+      offset += 3;
+      if interval == 0 {
+        return Err(MessageError("surface feature interval must be positive".into()));
+      }
+      let read_state = |offset: &mut usize| -> Result<String, MessageError> {
+        if *offset + 2 > body.len() {
+          return Err(MessageError("truncated surface feature state length".into()));
+        }
+        let length = read_u16(body, *offset) as usize;
+        *offset += 2;
+        let bytes = body
+          .get(*offset..*offset + length)
+          .ok_or_else(|| MessageError("truncated surface feature state".into()))?;
+        let state = std::str::from_utf8(bytes)
+          .map_err(|_| MessageError("surface feature state contains invalid UTF-8".into()))?;
+        if state.is_empty() {
+          return Err(MessageError("surface feature state is empty".into()));
+        }
+        *offset += length;
+        Ok(state.to_owned())
+      };
+      features.push(match kind {
+        1 => SurfaceFeature::Scatter { block: read_state(&mut offset)?, interval },
+        2 => {
+          let trunk = read_state(&mut offset)?;
+          let leaves = read_state(&mut offset)?;
+          if offset + 4 > body.len() {
+            return Err(MessageError("truncated tree dimensions".into()));
+          }
+          let height = read_u16(body, offset);
+          let canopy_radius = read_u16(body, offset + 2);
+          offset += 4;
+          if height == 0 {
+            return Err(MessageError("tree height must be positive".into()));
+          }
+          SurfaceFeature::Tree { trunk, leaves, interval, height, canopy_radius }
+        }
+        _ => return Err(MessageError("unknown surface feature type".into())),
+      });
+    }
     materials.push(Material {
       base_block: base_block.to_owned(),
       underground_block: underground_block.to_owned(),
       base_depth,
+      features,
     });
   }
   if materials.is_empty() {
@@ -308,10 +377,11 @@ mod tests {
     message.extend_from_slice(&(underground.len() as u16).to_le_bytes());
     message.extend_from_slice(underground.as_bytes());
     message.extend_from_slice(&depth.to_le_bytes());
+    message.extend_from_slice(&0_u16.to_le_bytes());
   }
 
   fn vertex_offset() -> usize {
-    HEADER_SIZE + 2 + b"minecraft:stone".len() + 2 + b"minecraft:stone".len() + 2
+    HEADER_SIZE + 2 + b"minecraft:stone".len() + 2 + b"minecraft:stone".len() + 2 + 2
   }
 
   #[test]
@@ -328,6 +398,7 @@ mod tests {
         base_block:        "minecraft:stone".into(),
         underground_block: "minecraft:stone".into(),
         base_depth:        1,
+        features:          vec![],
       }]
     );
     assert_eq!(mesh.units_per_block, 2.5);
@@ -402,8 +473,8 @@ mod tests {
     assert!(parse_mesh_snapshot(&invalid_utf8).unwrap_err().to_string().contains("invalid UTF-8"));
 
     let mut zero_depth = valid_message();
-    let depth = vertex_offset() - 2;
-    zero_depth[depth..vertex_offset()].copy_from_slice(&0_u16.to_le_bytes());
+    let depth = vertex_offset() - 4;
+    zero_depth[depth..depth + 2].copy_from_slice(&0_u16.to_le_bytes());
     assert!(parse_mesh_snapshot(&zero_depth).unwrap_err().to_string().contains("base depth"));
 
     let mut bad_id = valid_message();

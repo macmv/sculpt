@@ -12,24 +12,30 @@ bl_info = {
 
 from .operators import (
     CLIVE_OT_add_material,
+    CLIVE_OT_add_feature,
     CLIVE_OT_move_material,
     CLIVE_OT_publish_snapshot,
     CLIVE_OT_remove_material,
+    CLIVE_OT_remove_feature,
     CLIVE_OT_use_material_brush,
 )
-from .properties import CLIVE_PG_material, CLIVE_PG_settings
-from .ui import CLIVE_PT_panel, CLIVE_UL_materials
+from .properties import CLIVE_PG_feature, CLIVE_PG_material, CLIVE_PG_settings
+from .ui import CLIVE_PT_panel, CLIVE_UL_features, CLIVE_UL_materials
 
 
 CLASSES = (
+    CLIVE_PG_feature,
     CLIVE_PG_material,
     CLIVE_PG_settings,
     CLIVE_OT_add_material,
     CLIVE_OT_remove_material,
+    CLIVE_OT_add_feature,
+    CLIVE_OT_remove_feature,
     CLIVE_OT_use_material_brush,
     CLIVE_OT_move_material,
     CLIVE_OT_publish_snapshot,
     CLIVE_UL_materials,
+    CLIVE_UL_features,
     CLIVE_PT_panel,
 )
 
