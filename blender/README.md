@@ -11,9 +11,11 @@ Sculpting add-on.
 3. Enable **Sculpt Live**.
 
 The initial scaffold exposes a **Sculpt Live** panel in the 3D View sidebar.
-Choose a mesh source object and use **Publish Snapshot**. The current operator
-builds a compact binary full-mesh snapshot and sends it to the configured Unix
-domain socket. A revision advances only after the complete frame is written.
+Choose a mesh source object and use **Publish Snapshot**, or save the `.blend`
+file to publish automatically. The add-on builds a compact binary full-mesh
+snapshot and sends it to the configured Unix domain socket. A revision advances
+only after the complete frame is written. A failed local publish is reported in
+Blender's system console and does not prevent the file from saving.
 See `../protocol.md` for the wire format.
 
 ## Painted Materials

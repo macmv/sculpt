@@ -10,6 +10,29 @@ from .protocol import build_mesh_snapshot
 from .transport import send_snapshot
 
 
+def publish_scene_snapshot(scene, depsgraph):
+    """Publish the configured scene mesh and return its snapshot details."""
+    settings = scene.sculpt_live
+    source = settings.source_object
+    if source is None or source.type != "MESH":
+        raise ValueError("choose a mesh Sculpt Object before publishing")
+
+    evaluated = source.evaluated_get(depsgraph)
+    mesh = evaluated.to_mesh()
+    try:
+        if not mesh.polygons:
+            raise ValueError("the sculpt object has no faces to publish")
+
+        next_revision = settings.revision + 1
+        snapshot = build_mesh_snapshot(source, evaluated, mesh, next_revision, settings)
+        send_snapshot(settings.socket_path, snapshot.payload)
+        settings.revision = next_revision
+        settings.last_snapshot_bytes = len(snapshot.payload)
+        return snapshot
+    finally:
+        evaluated.to_mesh_clear()
+
+
 class CLIVE_OT_use_material_brush(bpy.types.Operator):
     """Set Sculpt Paint's brush color from this palette entry"""
 
@@ -130,22 +153,9 @@ class CLIVE_OT_publish_snapshot(bpy.types.Operator):
         return settings.source_object is not None and settings.source_object.type == "MESH"
 
     def execute(self, context):
-        settings = context.scene.sculpt_live
-        source = settings.source_object
-        depsgraph = context.evaluated_depsgraph_get()
-        evaluated = source.evaluated_get(depsgraph)
-        mesh = evaluated.to_mesh()
-
         try:
-            if not mesh.polygons:
-                self.report({"ERROR"}, "The sculpt object has no faces to publish")
-                return {"CANCELLED"}
-
-            next_revision = settings.revision + 1
-            snapshot = build_mesh_snapshot(source, evaluated, mesh, next_revision, settings)
-            send_snapshot(settings.socket_path, snapshot.payload)
-            settings.revision = next_revision
-            settings.last_snapshot_bytes = len(snapshot.payload)
+            snapshot = publish_scene_snapshot(context.scene, context.evaluated_depsgraph_get())
+            settings = context.scene.sculpt_live
             self.report(
                 {"INFO"},
                 f"Sent revision {settings.revision}: "
@@ -155,7 +165,5 @@ class CLIVE_OT_publish_snapshot(bpy.types.Operator):
         except (OSError, ValueError) as error:
             self.report({"ERROR"}, f"Publish failed: {error}")
             return {"CANCELLED"}
-        finally:
-            evaluated.to_mesh_clear()
 
         return {"FINISHED"}
