@@ -12,8 +12,8 @@ internal class DeltaQueue {
     pending.compute(delta.key) { _, old -> if (old == null || old.revision < delta.revision) delta else old }
   }
 
-  fun poll(): SectionDelta? {
-    val entry = pending.entries.firstOrNull() ?: return null
+  fun poll(predicate: (SectionKey) -> Boolean = { true }): SectionDelta? {
+    val entry = pending.entries.firstOrNull { predicate(it.key) } ?: return null
     return entry.takeIf { pending.remove(it.key, it.value) }?.value
   }
 

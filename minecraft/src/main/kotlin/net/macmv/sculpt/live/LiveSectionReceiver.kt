@@ -38,7 +38,10 @@ internal class LiveSectionReceiver {
     val world = server.getLevel(Level.OVERWORLD) ?: return
     val changedChunks = LinkedHashSet<LevelChunk>()
     for (ignored in 0 until maxSections) {
-      val delta = queue.poll() ?: break
+      // A second section replacement in the same chunk can invalidate light
+      // work queued by the first replacement. Keep the global budget high,
+      // but let each changed chunk's light update settle for one tick.
+      val delta = queue.poll { key -> changedChunks.none { it.pos.x == key.x && it.pos.z == key.z } } ?: break
       if (queue.isSuperseded(delta)) {
         logger.debug("Skipped superseded Sculpt section ({}, {}, {}) for revision {}", delta.key.x, delta.key.y, delta.key.z, delta.revision)
       } else if (install(world, delta)?.also(changedChunks::add) != null) {
@@ -75,6 +78,8 @@ internal class LiveSectionReceiver {
     chunk.blockEntities.keys.filter { it.y in sectionBottomY until sectionBottomY + 16 }
       .toList().forEach(chunk::removeBlockEntity)
     chunk.sections[sectionIndex] = replacement
+    // The light engine consults heightmaps while processing these checks.
+    Heightmap.primeHeightmaps(chunk, Heightmap.Types.values().toSet())
     val lightEngine = world.chunkSource.lightEngine
     lightEngine.updateSectionStatus(SectionPos.of(delta.key.x, delta.key.y, delta.key.z), replacement.hasOnlyAir())
     // A section-status update only handles an empty/non-empty transition. The
@@ -101,7 +106,6 @@ internal class LiveSectionReceiver {
 
   /** Completes all mutations for a chunk once, even when several sections changed this tick. */
   private fun finishChunkUpdate(world: ServerLevel, chunk: LevelChunk) {
-    Heightmap.primeHeightmaps(chunk, Heightmap.Types.values().toSet())
     chunk.markUnsaved()
     val lightEngine = world.chunkSource.lightEngine
     lightEngine.propagateLightSources(chunk.pos)
